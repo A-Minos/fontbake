@@ -1,0 +1,237 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    name: Resolve metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      owner_lc: ${{ steps.meta.outputs.owner_lc }}
+      is_tag: ${{ steps.meta.outputs.is_tag }}
+      expected_tag: ${{ steps.meta.outputs.expected_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve workspace version
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pkgid="$(cargo pkgid -p fontbake-cli)"
+          fragment="${pkgid##*#}"
+          version="${fragment##*@}"
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          is_tag=false
+          expected_tag="v${version}"
+
+          if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            is_tag=true
+            if [[ "${GITHUB_REF_NAME:-}" != "$expected_tag" ]]; then
+              echo "tag '${GITHUB_REF_NAME:-}' does not match workspace version '$expected_tag'" >&2
+              exit 1
+            fi
+          fi
+
+          {
+            echo "version=$version"
+            echo "owner_lc=$owner_lc"
+            echo "is_tag=$is_tag"
+            echo "expected_tag=$expected_tag"
+          } >> "$GITHUB_OUTPUT"
+
+  cli:
+    name: CLI ${{ matrix.target }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive_ext: tar.gz
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            archive_ext: zip
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive_ext: zip
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            archive_ext: tar.gz
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            archive_ext: tar.gz
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build fontbake CLI
+        shell: bash
+        run: cargo build --locked --release -p fontbake-cli --target ${{ matrix.target }}
+
+      - name: Package archive (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage_dir="stage/${{ matrix.target }}"
+          mkdir -p "$stage_dir"
+          cp "target/${{ matrix.target }}/release/fontbake" "$stage_dir/fontbake"
+          tar -C "$stage_dir" -czf "fontbake-${{ needs.metadata.outputs.version }}-${{ matrix.target }}.${{ matrix.archive_ext }}" fontbake
+
+      - name: Package archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $stageDir = "stage/${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/fontbake.exe" "$stageDir/fontbake.exe"
+          Compress-Archive -Path "$stageDir/fontbake.exe" -DestinationPath "fontbake-${{ needs.metadata.outputs.version }}-${{ matrix.target }}.${{ matrix.archive_ext }}" -Force
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-${{ matrix.target }}
+          path: fontbake-${{ needs.metadata.outputs.version }}-${{ matrix.target }}.${{ matrix.archive_ext }}
+          if-no-files-found: error
+
+  wasm:
+    name: WASM
+    needs: metadata
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Setup Node.js for GitHub Packages
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          registry-url: https://npm.pkg.github.com
+          scope: "@${{ needs.metadata.outputs.owner_lc }}"
+
+      - name: Install wasm-pack
+        shell: bash
+        run: cargo install wasm-pack --locked
+
+      - name: Build WASM package
+        shell: bash
+        run: wasm-pack build crates/fontbake-wasm --target web --scope ${{ needs.metadata.outputs.owner_lc }}
+
+      - name: Finalize npm package metadata
+        id: package_meta
+        shell: bash
+        env:
+          PACKAGE_JSON_PATH: crates/fontbake-wasm/pkg/package.json
+        run: |
+          set -euo pipefail
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const outputPath = process.env.GITHUB_OUTPUT;
+          const packageJsonPath = process.env.PACKAGE_JSON_PATH;
+          const data = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+          data.publishConfig = { registry: 'https://npm.pkg.github.com' };
+          fs.writeFileSync(packageJsonPath, `${JSON.stringify(data, null, 2)}\n`);
+          fs.appendFileSync(outputPath, `package_name=${data.name}\npackage_version=${data.version}\n`);
+          NODE
+
+      - name: Pack WASM npm tarball
+        working-directory: crates/fontbake-wasm/pkg
+        shell: bash
+        run: npm pack
+
+      - name: Detect existing GitHub Packages version
+        if: needs.metadata.outputs.is_tag == 'true'
+        id: published
+        working-directory: crates/fontbake-wasm/pkg
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGE_NAME: ${{ steps.package_meta.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.package_meta.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version --registry=https://npm.pkg.github.com; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish WASM to GitHub Packages
+        if: needs.metadata.outputs.is_tag == 'true' && steps.published.outputs.already_published != 'true'
+        working-directory: crates/fontbake-wasm/pkg
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm publish
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: wasm-package
+          path: crates/fontbake-wasm/pkg/*.tgz
+          if-no-files-found: error
+
+  release:
+    name: Publish release assets
+    needs:
+      - metadata
+      - cli
+      - wasm
+    if: needs.metadata.outputs.is_tag == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: cli-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Download WASM artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: wasm-package
+          path: release-assets
+
+      - name: Upload assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/*.tar.gz
+            release-assets/*.zip
+            release-assets/*.tgz

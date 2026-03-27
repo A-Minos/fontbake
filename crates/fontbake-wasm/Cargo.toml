@@ -2,6 +2,8 @@
 name = "fontbake-wasm"
 version.workspace = true
 edition.workspace = true
+description = "fontbake WebAssembly bindings"
+repository = "https://github.com/A-Minos/fontbake"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
