@@ -1,21 +1,25 @@
-//! Hiero-style row (shelf) packer.
+//! Hiero glyph-page packer.
 //!
-//! Replicates Hiero's atlas packing strategy:
-//! 1. Sort glyphs by height descending (stable sort preserves codepoint order
-//!    for equal heights).
-//! 2. Place glyphs left-to-right in rows (shelves).
-//! 3. Each shelf's height is the height of its tallest glyph.
-//! 4. When a glyph doesn't fit in the current row, start a new row.
-//! 5. When a new row doesn't fit on the current page, start a new page.
+//! Mirrors the real libGDX Hiero packing flow more closely than a simple shelf
+//! packer:
+//! 1. Stable-sort queued glyphs by height descending.
+//! 2. Fill one page by scanning the remaining glyph queue in order.
+//! 3. For each glyph, try the best existing non-last row, then the last row,
+//!    then a new row, using the same strict `<` / `>=` fit checks as Hiero.
+//! 4. Glyphs that don't fit stay in the queue for the next page.
 //!
 //! After packing, each `GlyphRecord` has its `page`, `x`, `y` fields set.
 
 use crate::model::{AtlasPage, FontbakeError, GlyphRecord};
 
-/// Pack glyphs into atlas pages using Hiero's row-based algorithm.
-///
-/// Mutates each glyph's `page`, `x`, `y` fields in place.
-/// Returns the atlas pages with glyph bitmaps composited.
+#[derive(Debug, Clone, Copy)]
+struct Row {
+    x: u32,
+    y: u32,
+    height: u32,
+}
+
+/// Pack glyphs into atlas pages using Hiero's glyph-page algorithm.
 pub fn pack_glyphs(
     glyphs: &mut [GlyphRecord],
     page_width: u32,
@@ -25,90 +29,139 @@ pub fn pack_glyphs(
         return Err(FontbakeError::Pack("page dimensions must be > 0".into()));
     }
 
-    // Build index array sorted by height descending, then by codepoint for stability
-    let mut indices: Vec<usize> = (0..glyphs.len()).collect();
-    indices.sort_by(|&a, &b| {
-        glyphs[b]
-            .height
-            .cmp(&glyphs[a].height)
-            .then_with(|| glyphs[a].codepoint.cmp(&glyphs[b].codepoint))
-    });
+    // Match UnicodeFont.heightComparator: stable sort by height only.
+    let mut remaining: Vec<usize> = (0..glyphs.len()).collect();
+    remaining.sort_by(|&a, &b| glyphs[b].height.cmp(&glyphs[a].height));
 
-    let mut pages: Vec<AtlasPage> = vec![AtlasPage::new(page_width, page_height)];
-    let mut shelf_x: u32 = 0;
-    let mut shelf_y: u32 = 0;
-    let mut shelf_h: u32 = 0;
-    let mut current_page: u32 = 0;
-
-    for &idx in &indices {
-        let gw = glyphs[idx].width;
-        let gh = glyphs[idx].height;
-
-        // Zero-size glyphs (e.g. space) get placed at (0,0) on current page
-        if gw == 0 || gh == 0 {
-            glyphs[idx].page = current_page;
+    // Zero-size glyphs don't participate in packing. Hiero attaches them to the
+    // currently loading page; for offline export a canonical (0,0) on page 0 is
+    // sufficient and keeps them out of the geometric algorithm.
+    for &idx in &remaining {
+        if glyphs[idx].width == 0 || glyphs[idx].height == 0 {
+            glyphs[idx].page = 0;
             glyphs[idx].x = 0;
             glyphs[idx].y = 0;
-            continue;
         }
+    }
+    remaining.retain(|&idx| glyphs[idx].width > 0 && glyphs[idx].height > 0);
 
-        // Check if glyph is too large for any page
-        if gw > page_width || gh > page_height {
+    for &idx in &remaining {
+        let gw = glyphs[idx].width;
+        let gh = glyphs[idx].height;
+        if gw >= page_width || gh >= page_height {
             return Err(FontbakeError::Pack(format!(
-                "glyph U+{:04X} ({}x{}) exceeds page size ({}x{})",
+                "glyph U+{:04X} ({}x{}) exceeds Hiero packable size for page ({}x{})",
                 glyphs[idx].codepoint, gw, gh, page_width, page_height
             )));
         }
+    }
 
-        // Try to fit in current shelf
-        if shelf_x + gw <= page_width && shelf_y + gh <= page_height {
-            // Fits in current shelf
-        } else if shelf_x + gw > page_width {
-            // Start new shelf
-            shelf_y += shelf_h;
-            shelf_x = 0;
-            shelf_h = 0;
+    let mut pages = Vec::new();
 
-            if shelf_y + gh > page_height {
-                // New page
-                current_page += 1;
-                pages.push(AtlasPage::new(page_width, page_height));
-                shelf_x = 0;
-                shelf_y = 0;
-                shelf_h = 0;
-            }
-        } else {
-            // shelf_y + gh > page_height but shelf_x + gw <= page_width
-            // Try next shelf first
-            shelf_y += shelf_h;
-            shelf_x = 0;
-            shelf_h = 0;
+    while !remaining.is_empty() {
+        let page_index = pages.len() as u32;
+        let mut page = AtlasPage::new(page_width, page_height);
+        let mut rows = vec![Row { x: 0, y: 0, height: 0 }];
+        let mut next_remaining = Vec::new();
+        let mut wrote_visible = false;
 
-            if shelf_y + gh > page_height {
-                // New page
-                current_page += 1;
-                pages.push(AtlasPage::new(page_width, page_height));
-                shelf_x = 0;
-                shelf_y = 0;
-                shelf_h = 0;
+        for idx in remaining.drain(..) {
+            let gw = glyphs[idx].width;
+            let gh = glyphs[idx].height;
+
+            if let Some((x, y)) = try_place_in_page(&mut rows, page_width, page_height, gw, gh) {
+                glyphs[idx].page = page_index;
+                glyphs[idx].x = x;
+                glyphs[idx].y = y;
+                blit_glyph(&mut page, &glyphs[idx]);
+                wrote_visible = true;
+            } else {
+                next_remaining.push(idx);
             }
         }
 
-        // Place glyph
-        glyphs[idx].page = current_page;
-        glyphs[idx].x = shelf_x;
-        glyphs[idx].y = shelf_y;
-
-        // Blit bitmap onto atlas page
-        blit_glyph(&mut pages[current_page as usize], &glyphs[idx]);
-
-        shelf_x += gw;
-        if gh > shelf_h {
-            shelf_h = gh;
+        if !wrote_visible {
+            let idx = next_remaining[0];
+            return Err(FontbakeError::Pack(format!(
+                "glyph U+{:04X} ({}x{}) cannot fit any Hiero row on page ({}x{})",
+                glyphs[idx].codepoint, glyphs[idx].width, glyphs[idx].height, page_width, page_height
+            )));
         }
+
+        pages.push(page);
+        remaining = next_remaining;
+    }
+
+    if pages.is_empty() {
+        pages.push(AtlasPage::new(page_width, page_height));
     }
 
     Ok(pages)
+}
+
+fn try_place_in_page(
+    rows: &mut Vec<Row>,
+    page_width: u32,
+    page_height: u32,
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32)> {
+    let mut best_row: Option<usize> = None;
+
+    // Match GlyphPage.loadGlyphs: scan any row before the last and choose the
+    // smallest-height row that can still contain the glyph.
+    if rows.len() > 1 {
+        for row_idx in 0..rows.len() - 1 {
+            let row = rows[row_idx];
+            if row.x + width >= page_width {
+                continue;
+            }
+            if row.y + height >= page_height {
+                continue;
+            }
+            if height > row.height {
+                continue;
+            }
+            if best_row.is_none() || row.height < rows[best_row.unwrap()].height {
+                best_row = Some(row_idx);
+            }
+        }
+    }
+
+    if let Some(row_idx) = best_row {
+        let row = &mut rows[row_idx];
+        let x = row.x;
+        let y = row.y;
+        row.x += width;
+        return Some((x, y));
+    }
+
+    let last_idx = rows.len() - 1;
+    let last = rows[last_idx];
+    if last.y + height >= page_height {
+        return None;
+    }
+
+    if last.x + width < page_width {
+        let row = &mut rows[last_idx];
+        let x = row.x;
+        let y = row.y;
+        row.height = row.height.max(height);
+        row.x += width;
+        return Some((x, y));
+    }
+
+    if last.y + last.height + height < page_height {
+        let new_y = last.y + last.height;
+        rows.push(Row {
+            x: width,
+            y: new_y,
+            height,
+        });
+        return Some((0, new_y));
+    }
+
+    None
 }
 
 /// Blit a glyph's RGBA bitmap onto an atlas page at its assigned (x, y).

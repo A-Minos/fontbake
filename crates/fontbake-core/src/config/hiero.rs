@@ -135,7 +135,13 @@ fn extract_kv(input: &str) -> HashMap<String, String> {
         };
 
         if let Some((k, v)) = line.split_once('=') {
-            map.insert(k.trim().to_string(), v.trim().to_string());
+            let key = k.trim().to_string();
+            let value = if key == "glyph.text" {
+                v.to_string()
+            } else {
+                v.trim().to_string()
+            };
+            map.insert(key, value);
         }
     }
     map

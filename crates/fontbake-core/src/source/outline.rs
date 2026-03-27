@@ -43,6 +43,11 @@ impl<'a> OutlineFont<'a> {
         self.face.glyph_hor_advance(glyph_id)
     }
 
+    /// Get horizontal left side bearing for a glyph in font units.
+    pub fn left_side_bearing(&self, glyph_id: ttf_parser::GlyphId) -> Option<i16> {
+        self.face.glyph_hor_side_bearing(glyph_id)
+    }
+
     /// Get the bounding box for a glyph in font units.
     /// Returns `None` for empty glyphs (e.g. space).
     pub fn glyph_bbox(&self, glyph_id: ttf_parser::GlyphId) -> Option<ttf_parser::Rect> {
@@ -52,6 +57,16 @@ impl<'a> OutlineFont<'a> {
     /// Get ascender in font units.
     pub fn ascender(&self) -> i16 {
         self.face.ascender()
+    }
+
+    /// Get OS/2 usWinAscent in font units (what Java AWT uses for base).
+    /// Falls back to hhea ascender if OS/2 is not present.
+    pub fn win_ascender(&self) -> u16 {
+        self.face
+            .tables()
+            .os2
+            .map(|os2| os2.windows_ascender() as u16)
+            .unwrap_or(self.face.ascender().unsigned_abs())
     }
 
     /// Get descender in font units (typically negative).

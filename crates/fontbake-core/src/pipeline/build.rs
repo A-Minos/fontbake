@@ -16,13 +16,46 @@ use crate::model::{
     BuildResult, BuildSpec, EffectSpec, FontbakeError, GlyphRecord, SourceKind,
 };
 use crate::pack::hiero_rows::pack_glyphs;
-use crate::raster::java_shape::{advance_width_px, ascender_px, line_height_px, rasterize_glyph};
+use crate::raster::java_shape::{advance_width_px, rasterize_glyph, rasterize_glyph_in_layout};
 use crate::source::outline::{resolve_codepoint, OutlineFont};
 
 /// Named font data for the pipeline — bytes + identifier.
 pub struct FontAsset<'a> {
     pub data: &'a [u8],
     pub name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResolvedGlyphPlan {
+    codepoint: char,
+    font_idx: usize,
+    glyph_id: ttf_parser::GlyphId,
+    missing: bool,
+}
+
+fn resolve_glyph_plan<'a>(fonts: &[&OutlineFont<'a>], codepoint: char) -> ResolvedGlyphPlan {
+    debug_assert!(!fonts.is_empty(), "font chain must contain a primary font");
+    if let Some((font_idx, glyph_id)) = resolve_codepoint(fonts, codepoint) {
+        ResolvedGlyphPlan {
+            codepoint,
+            font_idx,
+            glyph_id,
+            missing: false,
+        }
+    } else {
+        // Match Hiero's missing-glyph behaviour by falling back to the primary
+        // font's .notdef glyph instead of emitting a fake empty record.
+        ResolvedGlyphPlan {
+            codepoint,
+            font_idx: 0,
+            glyph_id: ttf_parser::GlyphId(0),
+            missing: true,
+        }
+    }
+}
+
+fn should_emit_kerning(left: ResolvedGlyphPlan, right: ResolvedGlyphPlan) -> bool {
+    !left.missing && !right.missing && left.font_idx == right.font_idx
 }
 
 /// Build a font from a `BuildSpec` and raw font data.
@@ -71,71 +104,126 @@ pub fn build_from_config(
     let size_px = spec.font_size as f32;
     let codepoints: Vec<char> = spec.glyph_text.chars().collect();
 
-    let mut glyphs: Vec<GlyphRecord> = Vec::with_capacity(codepoints.len());
+    // Java AWT FontMetrics: ascent = round(hhea_ascender * size / upem)
+    // descent = round(abs(hhea_descender) * size / upem)
+    // leading = round(hhea_lineGap * size / upem)
+    let scale_1x = size_px / primary.units_per_em as f32;
+    let base = (primary.ascender() as f32 * scale_1x).round() as u32;
+    let descent = (primary.descender().unsigned_abs() as f32 * scale_1x).round() as u32;
+    let leading = (primary.line_gap() as f32 * scale_1x).round() as u32;
 
-    for &cp in &codepoints {
-        let (font_idx, glyph_id) = match resolve_codepoint(&font_chain, cp) {
-            Some(r) => r,
-            None => {
-                // No font has this glyph — create an empty record
-                let mut rec =
-                    GlyphRecord::new(cp as u32, SourceKind::Outline, "missing".into());
-                rec.xadvance = 0;
-                glyphs.push(rec);
-                continue;
-            }
-        };
+    let resolved_glyphs: Vec<ResolvedGlyphPlan> = codepoints
+        .iter()
+        .copied()
+        .map(|cp| resolve_glyph_plan(&font_chain, cp))
+        .collect();
 
-        let font = font_chain[font_idx];
+    let mut glyphs: Vec<GlyphRecord> = Vec::with_capacity(resolved_glyphs.len());
+
+    for resolved in &resolved_glyphs {
+        let cp = resolved.codepoint;
+        let font = font_chain[resolved.font_idx];
         let source_id = font.source_id.clone();
 
-        // --- Rasterize ---
-        let raster = rasterize_glyph(font, glyph_id, size_px, df_scale)?;
+        // --- Measure glyph at 1x for Java-compatible layout metrics ---
+        let measure = rasterize_glyph(font, resolved.glyph_id, size_px, 1)?;
 
         let mut rec = GlyphRecord::new(cp as u32, SourceKind::Outline, source_id);
+        let raw_adv = advance_width_px(font, resolved.glyph_id, size_px);
 
-        match raster {
-            Some(r) => {
-                // --- Apply DistanceFieldEffect ---
+        match measure {
+            Some(measure) => {
+                let pad_l = spec.padding.left.max(0) as u32;
+                let pad_t = spec.padding.top.max(0) as u32;
+
+                let scale_1x = size_px / font.units_per_em as f32;
+                let advance_px =
+                    font.advance_width(resolved.glyph_id).unwrap_or(0) as f32 * scale_1x;
+                let lsb_px = font.left_side_bearing(resolved.glyph_id).unwrap_or(0) as f32 * scale_1x;
+                let layout = compute_java_layout(
+                    measure.bearing_x,
+                    measure.bearing_y,
+                    measure.width,
+                    measure.height,
+                    lsb_px,
+                    advance_px,
+                    base,
+                    spec.padding.left,
+                    spec.padding.right,
+                    spec.padding.top,
+                    spec.padding.bottom,
+                );
+
+                let layout_mask = rasterize_glyph_in_layout(
+                    font,
+                    resolved.glyph_id,
+                    size_px,
+                    df_scale,
+                    layout.width,
+                    layout.height,
+                    measure.bearing_x,
+                    measure.bearing_y,
+                    pad_l,
+                    pad_t,
+                )?
+                .ok_or_else(|| FontbakeError::FontLoad(format!(
+                    "glyph U+{:04X} unexpectedly disappeared during layout rasterization",
+                    cp as u32
+                )))?;
+
+                let mask_w = layout
+                    .width
+                    .checked_mul(df_scale)
+                    .ok_or_else(|| FontbakeError::Pack("layout mask width overflow".into()))?;
+                let mask_h = layout
+                    .height
+                    .checked_mul(df_scale)
+                    .ok_or_else(|| FontbakeError::Pack("layout mask height overflow".into()))?;
+
                 let config = DistanceFieldConfig {
                     scale: df_scale,
                     spread: df_spread,
                     color: df_color,
                 };
-                let (rgba, out_w, out_h) =
-                    generate_distance_field(&r.mask, r.width, r.height, &config)?;
+                let (sdf_rgba, sdf_w, sdf_h) =
+                    generate_distance_field(&layout_mask, mask_w, mask_h, &config)?;
+                if sdf_w != layout.width || sdf_h != layout.height {
+                    return Err(FontbakeError::Pack(format!(
+                        "glyph U+{:04X} layout/SDF size mismatch: layout={}x{}, sdf={}x{}",
+                        cp as u32, layout.width, layout.height, sdf_w, sdf_h
+                    )));
+                }
 
-                // Compute offsets: bearing adjusted for downscale + padding
-                let bearing_x = r.bearing_x / df_scale as i32;
-                let bearing_y = r.bearing_y / df_scale as i32;
-
-                rec.bitmap_rgba = rgba;
-                rec.width = out_w;
-                rec.height = out_h;
-                rec.xoffset = bearing_x + spec.padding.left;
-                rec.yoffset = bearing_y + spec.padding.top;
-                rec.xadvance = advance_width_px(font, glyph_id, size_px)
-                    + spec.advance_adjust.x;
+                rec.bitmap_rgba = sdf_rgba;
+                rec.width = layout.width;
+                rec.height = layout.height;
+                rec.xoffset = layout.xoffset;
+                rec.yoffset = layout.yoffset;
+                rec.xadvance =
+                    raw_adv + spec.advance_adjust.x + spec.padding.left + spec.padding.right;
             }
             None => {
-                // Empty glyph (e.g. space)
-                rec.xadvance = advance_width_px(font, glyph_id, size_px)
-                    + spec.advance_adjust.x;
+                rec.width = 0;
+                rec.height = 0;
+                rec.xoffset = -spec.padding.left;
+                rec.yoffset = 0;
+                rec.xadvance =
+                    raw_adv + spec.advance_adjust.x + spec.padding.left + spec.padding.right;
             }
         }
 
         // --- Kerning ---
-        for &other_cp in &codepoints {
-            if other_cp == cp {
-                continue;
-            }
-            if let Some(other_gid) = font.glyph_id(other_cp) {
-                let kern = font.kern(glyph_id, other_gid);
+        if !resolved.missing {
+            for other in &resolved_glyphs {
+                if other.codepoint == cp || !should_emit_kerning(*resolved, *other) {
+                    continue;
+                }
+                let kern = font.kern(resolved.glyph_id, other.glyph_id);
                 if kern != 0 {
                     let scale = size_px / font.units_per_em as f32;
                     let kern_px = (kern as f32 * scale).round() as i16;
                     if kern_px != 0 {
-                        rec.kernings.push((other_cp as u32, kern_px));
+                        rec.kernings.push((other.codepoint as u32, kern_px));
                     }
                 }
             }
@@ -148,8 +236,10 @@ pub fn build_from_config(
     let pages = pack_glyphs(&mut glyphs, spec.page_width, spec.page_height)?;
 
     // --- Export ---
-    let lh = line_height_px(&primary, size_px);
-    let base = ascender_px(&primary, size_px) as u32;
+    // Java Hiero: lineHeight = descent + ascent + leading + padTop + padBottom + advY
+    let lh = (descent as i32 + base as i32 + leading as i32
+        + spec.padding.top + spec.padding.bottom
+        + spec.advance_adjust.y) as u32;
 
     let page_filenames: Vec<String> = (0..pages.len())
         .map(|i| format!("{}{}.png", spec.font_name, if i == 0 { String::new() } else { format!("_{i}") }))
@@ -183,4 +273,58 @@ pub fn build_from_config(
         page_pngs,
         glyphs,
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct JavaGlyphLayout {
+    width: u32,
+    height: u32,
+    xoffset: i32,
+    yoffset: i32,
+}
+
+fn compute_java_layout(
+    bounds_x: i32,
+    bounds_y: i32,
+    bounds_w: u32,
+    bounds_h: u32,
+    left_side_bearing_px: f32,
+    advance_px: f32,
+    base: u32,
+    pad_left: i32,
+    pad_right: i32,
+    pad_top: i32,
+    pad_bottom: i32,
+) -> JavaGlyphLayout {
+    if bounds_w == 0 || bounds_h == 0 {
+        return JavaGlyphLayout {
+            width: 0,
+            height: 0,
+            xoffset: -pad_left,
+            yoffset: 0,
+        };
+    }
+
+    // Match Glyph.java: int lsb = (int)metrics.getLSB(); if (lsb > 0) lsb = 0;
+    let mut lsb = left_side_bearing_px as i32;
+    if lsb > 0 {
+        lsb = 0;
+    }
+
+    // GlyphMetrics.getRSB() is effectively advance - lsb - pixelBounds.width.
+    let mut rsb = (advance_px - left_side_bearing_px - bounds_w as f32) as i32;
+    if rsb > 0 {
+        rsb = 0;
+    }
+
+    let glyph_width = (bounds_w as i32 - lsb - rsb).max(0) as u32;
+    let width = glyph_width + pad_left.max(0) as u32 + pad_right.max(0) as u32;
+    let height = bounds_h + pad_top.max(0) as u32 + pad_bottom.max(0) as u32;
+
+    JavaGlyphLayout {
+        width,
+        height,
+        xoffset: bounds_x - pad_left,
+        yoffset: base as i32 + bounds_y - pad_top,
+    }
 }

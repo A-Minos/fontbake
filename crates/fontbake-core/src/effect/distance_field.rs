@@ -75,9 +75,9 @@ pub fn generate_distance_field(
 
     for oy in 0..out_h {
         for ox in 0..out_w {
-            // Centre of this output pixel in mask coordinates
-            let cx = (ox as f32 + 0.5) * scale as f32;
-            let cy = (oy as f32 + 0.5) * scale as f32;
+            // Java: centerX = x * downscale + downscale / 2 (integer)
+            let cx = (ox * scale + scale / 2) as f32;
+            let cy = (oy * scale + scale / 2) as f32;
 
             // Sample the centre of the high-res mask to determine inside/outside
             let center_val = sample_mask(mask, mask_w, mask_h, cx, cy);
@@ -91,8 +91,10 @@ pub fn generate_distance_field(
             // Map signed distance to [0, 255]
             // Inside: 128..255, Outside: 0..127, Edge: 128
             let signed_dist = if inside { min_dist } else { -min_dist };
-            let normalised = (signed_dist / spread_scaled + 1.0) * 0.5;
-            let alpha = (normalised * 255.0).round().clamp(0.0, 255.0) as u8;
+            // Java: alpha = 0.5f + 0.5f * (signedDistance / spread)
+            //        alphaByte = (int)(alpha * 0xFF)  — truncation, not round
+            let normalised = 0.5 + 0.5 * (signed_dist / spread_scaled);
+            let alpha = (normalised.clamp(0.0, 1.0) * 255.0) as u8;
 
             let idx = ((oy * out_w + ox) * 4) as usize;
             rgba[idx] = cr;
@@ -125,14 +127,16 @@ fn find_min_edge_distance(
     spread: f32,
     inside: bool,
 ) -> f32 {
-    let spread_sq = spread * spread;
-    let mut min_dist_sq = spread_sq;
+    // Java: delta = (int)ceil(spread); closestSquareDist = delta * delta
+    let delta = spread.ceil();
+    let mut min_dist_sq = delta * delta;
 
     // Search box in mask coordinates
-    let x0 = ((cx - spread).floor().max(0.0)) as u32;
-    let y0 = ((cy - spread).floor().max(0.0)) as u32;
-    let x1 = ((cx + spread).ceil() as u32).min(w.saturating_sub(1));
-    let y1 = ((cy + spread).ceil() as u32).min(h.saturating_sub(1));
+    let delta_i = delta as u32;
+    let x0 = (cx as u32).saturating_sub(delta_i);
+    let y0 = (cy as u32).saturating_sub(delta_i);
+    let x1 = ((cx as u32) + delta_i).min(w.saturating_sub(1));
+    let y1 = ((cy as u32) + delta_i).min(h.saturating_sub(1));
 
     for sy in y0..=y1 {
         for sx in x0..=x1 {
@@ -140,8 +144,9 @@ fn find_min_edge_distance(
             let sample_inside = val >= 128;
 
             if sample_inside != inside {
-                let dx = sx as f32 + 0.5 - cx;
-                let dy = sy as f32 + 0.5 - cy;
+                // Java measures distance to pixel top-left corner, not center.
+                let dx = sx as f32 - cx;
+                let dy = sy as f32 - cy;
                 let dist_sq = dx * dx + dy * dy;
                 if dist_sq < min_dist_sq {
                     min_dist_sq = dist_sq;
@@ -150,7 +155,9 @@ fn find_min_edge_distance(
         }
     }
 
-    min_dist_sq.sqrt()
+    // Java: return (base ? 1 : -1) * Math.min(closestDist, spread)
+    // The caller handles the sign; we just return the unsigned distance.
+    min_dist_sq.sqrt().min(spread)
 }
 
 // ---------------------------------------------------------------------------
