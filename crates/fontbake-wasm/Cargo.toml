@@ -1,0 +1,15 @@
+[package]
+name = "fontbake-wasm"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+fontbake-core = { path = "../fontbake-core" }
+wasm-bindgen.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+serde-wasm-bindgen.workspace = true

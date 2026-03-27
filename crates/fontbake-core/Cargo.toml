@@ -1,0 +1,12 @@
+[package]
+name = "fontbake-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ttf-parser.workspace = true
+tiny-skia.workspace = true
+png.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,14 @@
+[package]
+name = "fontbake-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "fontbake"
+path = "src/main.rs"
+
+[dependencies]
+fontbake-core = { path = "../fontbake-core" }
+clap.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
