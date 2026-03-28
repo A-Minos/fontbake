@@ -9,9 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::model::{
-    AdvanceAdjust, BuildSpec, EffectSpec, FontbakeError, Padding, RenderMode,
-};
+use crate::model::{AdvanceAdjust, BuildSpec, EffectSpec, FontbakeError, Padding, RenderMode};
 
 /// Parse a `.hiero` file byte slice into a [`BuildSpec`].
 ///
@@ -36,10 +34,7 @@ pub fn parse_hiero(input: &str) -> Result<BuildSpec, FontbakeError> {
     }
 
     // --- primary font ---
-    let primary_font_path = kv
-        .get("font2.file")
-        .cloned()
-        .unwrap_or_default();
+    let primary_font_path = kv.get("font2.file").cloned().unwrap_or_default();
 
     // --- fallback fonts: fallback.font.0, fallback.font.1, … ---
     let mut fallback_font_paths: Vec<String> = Vec::new();
@@ -61,10 +56,10 @@ pub fn parse_hiero(input: &str) -> Result<BuildSpec, FontbakeError> {
 
     // --- padding ---
     let padding = Padding {
-        top:    parse_i32(&kv, "pad.top",    0)?,
-        right:  parse_i32(&kv, "pad.right",  0)?,
+        top: parse_i32(&kv, "pad.top", 0)?,
+        right: parse_i32(&kv, "pad.right", 0)?,
         bottom: parse_i32(&kv, "pad.bottom", 0)?,
-        left:   parse_i32(&kv, "pad.left",   0)?,
+        left: parse_i32(&kv, "pad.left", 0)?,
     };
 
     // --- advance adjust ---
@@ -74,7 +69,7 @@ pub fn parse_hiero(input: &str) -> Result<BuildSpec, FontbakeError> {
     };
 
     // --- page size ---
-    let page_width  = parse_u32(&kv, "glyph.page.width",  1024)?;
+    let page_width = parse_u32(&kv, "glyph.page.width", 1024)?;
     let page_height = parse_u32(&kv, "glyph.page.height", 1024)?;
 
     // --- glyph set ---
@@ -123,7 +118,9 @@ fn extract_kv(input: &str) -> HashMap<String, String> {
             let prefix = &raw_line[..pos];
             // Prefix must be `#` followed by 2-4 uppercase-alphanum chars.
             let inner = &prefix[1.min(prefix.len())..];
-            if prefix.starts_with('#') && inner.len() >= 2 && inner.len() <= 4
+            if prefix.starts_with('#')
+                && inner.len() >= 2
+                && inner.len() <= 4
                 && inner.chars().all(|c| c.is_ascii_alphanumeric())
             {
                 raw_line[pos + 1..].trim_start()
@@ -167,18 +164,16 @@ fn parse_effects(kv: &HashMap<String, String>) -> Result<Vec<EffectSpec>, Fontba
             let scale = kv
                 .get("effect.Scale")
                 .map(|v| {
-                    v.parse::<u32>().map_err(|_| {
-                        FontbakeError::Config(format!("invalid effect.Scale: {v}"))
-                    })
+                    v.parse::<u32>()
+                        .map_err(|_| FontbakeError::Config(format!("invalid effect.Scale: {v}")))
                 })
                 .transpose()?
                 .unwrap_or(32);
             let spread = kv
                 .get("effect.Spread")
                 .map(|v| {
-                    v.parse::<f32>().map_err(|_| {
-                        FontbakeError::Config(format!("invalid effect.Spread: {v}"))
-                    })
+                    v.parse::<f32>()
+                        .map_err(|_| FontbakeError::Config(format!("invalid effect.Spread: {v}")))
                 })
                 .transpose()?
                 .unwrap_or(3.5);
@@ -299,12 +294,22 @@ mod tests {
         assert_eq!(spec.advance_adjust.x, -8);
         assert_eq!(spec.page_width, 1024);
         assert_eq!(spec.glyph_text, "ABC");
-        assert_eq!(spec.primary_font_path, "/home/miansoft/Project/bmfont-test/hun2.ttf");
-        assert_eq!(spec.fallback_font_paths, vec!["/home/miansoft/Project/bmfont-test/chinese_font.otf"]);
+        assert_eq!(
+            spec.primary_font_path,
+            "/home/miansoft/Project/bmfont-test/hun2.ttf"
+        );
+        assert_eq!(
+            spec.fallback_font_paths,
+            vec!["/home/miansoft/Project/bmfont-test/chinese_font.otf"]
+        );
         assert!(matches!(spec.render_mode, RenderMode::Java));
         assert_eq!(spec.effects.len(), 1);
         match &spec.effects[0] {
-            EffectSpec::DistanceField { color, scale, spread } => {
+            EffectSpec::DistanceField {
+                color,
+                scale,
+                spread,
+            } => {
                 assert_eq!(color, "ffffff");
                 assert_eq!(*scale, 32);
                 assert!((spread - 3.5).abs() < 1e-5);
@@ -336,6 +341,9 @@ mod tests {
             "#DD:fallback.font.2=/fonts/c.ttf\n",
         );
         let spec = parse_hiero(input).unwrap();
-        assert_eq!(spec.fallback_font_paths, vec!["/fonts/a.ttf", "/fonts/b.ttf", "/fonts/c.ttf"]);
+        assert_eq!(
+            spec.fallback_font_paths,
+            vec!["/fonts/a.ttf", "/fonts/b.ttf", "/fonts/c.ttf"]
+        );
     }
 }

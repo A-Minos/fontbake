@@ -1,0 +1,45 @@
+name: auto-fmt
+
+on:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: write
+
+jobs:
+  auto-fmt:
+    name: Auto Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        id: fmt
+        run: |
+          if ! cargo fmt --all -- --check; then
+            echo "needs_fmt=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_fmt=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run cargo fmt
+        if: steps.fmt.outputs.needs_fmt == 'true'
+        run: cargo fmt --all
+
+      - name: Commit changes
+        if: steps.fmt.outputs.needs_fmt == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add -A
+          git commit -m "style: auto format with cargo fmt"
+          git push

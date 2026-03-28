@@ -10,15 +10,13 @@
 //! 6. Pack all glyphs into atlas pages.
 //! 7. Export as text BMFont (.fnt) + PNG pages.
 
-use crate::effect::distance_field::{generate_distance_field, DistanceFieldConfig};
+use crate::effect::distance_field::{DistanceFieldConfig, generate_distance_field};
 use crate::export::bmfont_text::{encode_atlas_png, glyphs_to_fnt};
-use crate::model::{
-    BuildResult, BuildSpec, EffectSpec, FontbakeError, GlyphRecord, SourceKind,
-};
+use crate::model::{BuildResult, BuildSpec, EffectSpec, FontbakeError, GlyphRecord, SourceKind};
 use crate::pack::hiero_rows::pack_glyphs;
-use crate::raster::java_shape::{advance_width_px, rasterize_glyph, rasterize_glyph_in_layout};
 use crate::raster::hinted_bounds::HintedFont;
-use crate::source::outline::{resolve_codepoint, OutlineFont};
+use crate::raster::java_shape::{advance_width_px, rasterize_glyph, rasterize_glyph_in_layout};
+use crate::source::outline::{OutlineFont, resolve_codepoint};
 
 /// Named font data for the pipeline — bytes + identifier.
 pub struct FontAsset<'a> {
@@ -77,11 +75,7 @@ pub fn build_from_config(
         }) => {
             let c = DistanceFieldConfig::parse_color(color)?;
             (*c.first().unwrap(), *c.get(1).unwrap(), *c.get(2).unwrap());
-            (
-                DistanceFieldConfig::parse_color(color)?,
-                *scale,
-                *spread,
-            )
+            (DistanceFieldConfig::parse_color(color)?, *scale, *spread)
         }
         None => {
             return Err(FontbakeError::Config(
@@ -97,9 +91,7 @@ pub fn build_from_config(
         fallbacks.push(OutlineFont::load(data, name.clone())?);
     }
 
-    let font_chain: Vec<&OutlineFont> = std::iter::once(&primary)
-        .chain(fallbacks.iter())
-        .collect();
+    let font_chain: Vec<&OutlineFont> = std::iter::once(&primary).chain(fallbacks.iter()).collect();
 
     // --- Resolve codepoints ---
     let size_px = spec.font_size as f32;
@@ -168,7 +160,8 @@ pub fn build_from_config(
                 let scale_1x = size_px / font.units_per_em as f32;
                 let advance_px =
                     font.advance_width(resolved.glyph_id).unwrap_or(0) as f32 * scale_1x;
-                let lsb_px = font.left_side_bearing(resolved.glyph_id).unwrap_or(0) as f32 * scale_1x;
+                let lsb_px =
+                    font.left_side_bearing(resolved.glyph_id).unwrap_or(0) as f32 * scale_1x;
                 let layout = compute_java_layout(
                     measure.bearing_x,
                     measure.bearing_y,
@@ -195,10 +188,12 @@ pub fn build_from_config(
                     pad_l,
                     pad_t,
                 )?
-                .ok_or_else(|| FontbakeError::FontLoad(format!(
-                    "glyph U+{:04X} unexpectedly disappeared during layout rasterization",
-                    cp as u32
-                )))?;
+                .ok_or_else(|| {
+                    FontbakeError::FontLoad(format!(
+                        "glyph U+{:04X} unexpectedly disappeared during layout rasterization",
+                        cp as u32
+                    ))
+                })?;
 
                 let mask_w = layout
                     .width
@@ -266,12 +261,25 @@ pub fn build_from_config(
 
     // --- Export ---
     // Java Hiero: lineHeight = descent + ascent + leading + padTop + padBottom + advY
-    let lh = (descent as i32 + base as i32 + leading as i32
-        + spec.padding.top + spec.padding.bottom
+    let lh = (descent as i32
+        + base as i32
+        + leading as i32
+        + spec.padding.top
+        + spec.padding.bottom
         + spec.advance_adjust.y) as u32;
 
     let page_filenames: Vec<String> = (0..pages.len())
-        .map(|i| format!("{}{}.png", spec.font_name, if i == 0 { String::new() } else { format!("_{i}") }))
+        .map(|i| {
+            format!(
+                "{}{}.png",
+                spec.font_name,
+                if i == 0 {
+                    String::new()
+                } else {
+                    format!("_{i}")
+                }
+            )
+        })
         .collect();
 
     let fnt_text = glyphs_to_fnt(

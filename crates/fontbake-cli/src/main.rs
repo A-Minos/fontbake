@@ -89,22 +89,16 @@ fn cmd_build(config_path: &Path, output_dir: &Path) -> Result<(), Box<dyn std::e
     println!("  Effects: {} configured", spec.effects.len());
     println!("  Glyph text: {} chars", spec.glyph_text.chars().count());
     println!("  Primary font: {}", spec.primary_font_path);
-    println!(
-        "  Fallback fonts: {}",
-        spec.fallback_font_paths.len()
-    );
+    println!("  Fallback fonts: {}", spec.fallback_font_paths.len());
 
     // Load font files
-    let primary_data = fs::read(&spec.primary_font_path).map_err(|e| {
-        format!(
-            "cannot read primary font '{}': {e}",
-            spec.primary_font_path
-        )
-    })?;
+    let primary_data = fs::read(&spec.primary_font_path)
+        .map_err(|e| format!("cannot read primary font '{}': {e}", spec.primary_font_path))?;
 
     let mut fallback_data: Vec<(Vec<u8>, String)> = Vec::new();
     for path in &spec.fallback_font_paths {
-        let data = fs::read(path).map_err(|e| format!("cannot read fallback font '{path}': {e}"))?;
+        let data =
+            fs::read(path).map_err(|e| format!("cannot read fallback font '{path}': {e}"))?;
         let name = Path::new(path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -184,11 +178,7 @@ fn cmd_import(fnt_path: &Path, output_dir: &Path) -> Result<(), Box<dyn std::err
     fs::create_dir_all(output_dir)?;
     let out_fnt = output_dir.join(format!("{source_id}_reimport.fnt"));
 
-    let page_filenames: Vec<String> = bmfont
-        .pages
-        .iter()
-        .map(|p| p.file.clone())
-        .collect();
+    let page_filenames: Vec<String> = bmfont.pages.iter().map(|p| p.file.clone()).collect();
 
     let fnt_out = fontbake_core::export::bmfont_text::glyphs_to_fnt(
         &glyphs,

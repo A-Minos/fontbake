@@ -84,9 +84,8 @@ pub fn generate_distance_field(
             let inside = center_val >= 128;
 
             // Find minimum distance to an edge within the spread radius
-            let min_dist = find_min_edge_distance(
-                mask, mask_w, mask_h, cx, cy, spread_scaled, inside,
-            );
+            let min_dist =
+                find_min_edge_distance(mask, mask_w, mask_h, cx, cy, spread_scaled, inside);
 
             // Map signed distance to [0, 255]
             // Inside: 128..255, Outside: 0..127, Edge: 128
@@ -223,7 +222,11 @@ mod tests {
         for y in 0..h {
             for x in 0..w {
                 let idx = ((y * w + x) * 4 + 3) as usize;
-                assert!(rgba[idx] >= 128, "pixel ({x},{y}) alpha={} < 128", rgba[idx]);
+                assert!(
+                    rgba[idx] >= 128,
+                    "pixel ({x},{y}) alpha={} < 128",
+                    rgba[idx]
+                );
             }
         }
     }
@@ -246,7 +249,11 @@ mod tests {
         for y in 0..h {
             for x in 0..w {
                 let idx = ((y * w + x) * 4 + 3) as usize;
-                assert!(rgba[idx] < 128, "pixel ({x},{y}) alpha={} >= 128", rgba[idx]);
+                assert!(
+                    rgba[idx] < 128,
+                    "pixel ({x},{y}) alpha={} >= 128",
+                    rgba[idx]
+                );
             }
         }
     }
@@ -268,12 +275,12 @@ mod tests {
             spread: 4.0,
             color: [255, 255, 255],
         };
-        let (rgba, w, _h) = generate_distance_field(&mask, mask_w, mask_h, &config).unwrap();
+        let (rgba, _w, _h) = generate_distance_field(&mask, mask_w, mask_h, &config).unwrap();
         // Pixel at x=1 (near left side, inside) should have alpha > 128
-        let inside_alpha = rgba[(0 * w * 4 + 1 * 4 + 3) as usize];
+        let inside_alpha = rgba[(1 * 4 + 3) as usize];
         assert!(inside_alpha >= 128);
         // Pixel at x=2 (near right side, outside) should have alpha < 128
-        let outside_alpha = rgba[(0 * w * 4 + 2 * 4 + 3) as usize];
+        let outside_alpha = rgba[(2 * 4 + 3) as usize];
         assert!(outside_alpha < 128);
     }
 }

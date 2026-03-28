@@ -117,10 +117,28 @@ impl<'a> OutlineFont<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub enum PathCommand {
-    MoveTo { x: f32, y: f32 },
-    LineTo { x: f32, y: f32 },
-    QuadTo { x1: f32, y1: f32, x: f32, y: f32 },
-    CurveTo { x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32 },
+    MoveTo {
+        x: f32,
+        y: f32,
+    },
+    LineTo {
+        x: f32,
+        y: f32,
+    },
+    QuadTo {
+        x1: f32,
+        y1: f32,
+        x: f32,
+        y: f32,
+    },
+    CurveTo {
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        x: f32,
+        y: f32,
+    },
     Close,
 }
 
@@ -150,8 +168,14 @@ impl ttf_parser::OutlineBuilder for PathBuilder {
     }
 
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-        self.commands
-            .push(PathCommand::CurveTo { x1, y1, x2, y2, x, y });
+        self.commands.push(PathCommand::CurveTo {
+            x1,
+            y1,
+            x2,
+            y2,
+            x,
+            y,
+        });
     }
 
     fn close(&mut self) {

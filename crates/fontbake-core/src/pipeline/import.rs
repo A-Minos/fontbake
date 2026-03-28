@@ -41,9 +41,7 @@ pub fn import_bmfont(
 pub fn decode_png_page(png_bytes: &[u8]) -> Result<PngPage, FontbakeError> {
     let mut decoder = png::Decoder::new(png_bytes);
     // Expand palette (Indexed) to RGB/RGBA and expand 1/2/4-bit grayscale to 8-bit.
-    decoder.set_transformations(
-        png::Transformations::EXPAND | png::Transformations::ALPHA,
-    );
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::ALPHA);
     let mut reader = decoder
         .read_info()
         .map_err(|e| FontbakeError::Png(e.to_string()))?;

@@ -5,7 +5,9 @@
 
 use crate::model::FontbakeError;
 use skrifa::instance::Size;
-use skrifa::outline::{DrawSettings, HintingInstance, HintingOptions, OutlineGlyphCollection, OutlinePen};
+use skrifa::outline::{
+    DrawSettings, HintingInstance, HintingOptions, OutlineGlyphCollection, OutlinePen,
+};
 use skrifa::prelude::*;
 
 /// Hinted vertical bounds for a single glyph.
@@ -32,8 +34,13 @@ impl<'a> HintedFont<'a> {
         let size = Size::new(size_px as f32);
         let outlines = font.outline_glyphs();
 
-        let hinting = HintingInstance::new(&outlines, size, LocationRef::default(), HintingOptions::default())
-            .map_err(|e| FontbakeError::FontLoad(format!("skrifa hinting init failed: {e}")))?;
+        let hinting = HintingInstance::new(
+            &outlines,
+            size,
+            LocationRef::default(),
+            HintingOptions::default(),
+        )
+        .map_err(|e| FontbakeError::FontLoad(format!("skrifa hinting init failed: {e}")))?;
 
         Ok(Self { font, hinting })
     }

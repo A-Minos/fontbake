@@ -156,7 +156,14 @@ fn build_outline_path(
                     -y * scale + translate_y,
                 );
             }
-            PathCommand::CurveTo { x1, y1, x2, y2, x, y } => {
+            PathCommand::CurveTo {
+                x1,
+                y1,
+                x2,
+                y2,
+                x,
+                y,
+            } => {
                 pb.cubic_to(
                     x1 * scale + translate_x,
                     -y1 * scale + translate_y,
@@ -240,7 +247,11 @@ fn crop_to_content(mask: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u32, 
 }
 
 /// Compute horizontal advance in pixels at a given size.
-pub fn advance_width_px(font: &OutlineFont<'_>, glyph_id: ttf_parser::GlyphId, size_px: f32) -> i32 {
+pub fn advance_width_px(
+    font: &OutlineFont<'_>,
+    glyph_id: ttf_parser::GlyphId,
+    size_px: f32,
+) -> i32 {
     let scale = size_px / font.units_per_em as f32;
     let advance = font.advance_width(glyph_id).unwrap_or(0) as f32;
     (advance * scale).round() as i32

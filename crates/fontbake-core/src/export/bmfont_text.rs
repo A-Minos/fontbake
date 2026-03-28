@@ -6,8 +6,8 @@
 use std::fmt::Write;
 
 use crate::model::{
-    AtlasPage, BmFont, BmFontChar, BmFontCommon, BmFontInfo, BmFontKerning,
-    BmFontPage, FontbakeError, GlyphRecord,
+    AtlasPage, BmFont, BmFontChar, BmFontCommon, BmFontInfo, BmFontKerning, BmFontPage,
+    FontbakeError, GlyphRecord,
 };
 
 /// Export a [`BmFont`] structure to text `.fnt` format.
@@ -105,11 +105,13 @@ pub fn glyphs_to_fnt(
         kernings: glyphs
             .iter()
             .flat_map(|g| {
-                g.kernings.iter().map(move |(second, amount)| BmFontKerning {
-                    first: g.codepoint,
-                    second: *second,
-                    amount: *amount,
-                })
+                g.kernings
+                    .iter()
+                    .map(move |(second, amount)| BmFontKerning {
+                        first: g.codepoint,
+                        second: *second,
+                        amount: *amount,
+                    })
             })
             .collect(),
     };

@@ -61,7 +61,11 @@ pub fn pack_glyphs(
     while !remaining.is_empty() {
         let page_index = pages.len() as u32;
         let mut page = AtlasPage::new(page_width, page_height);
-        let mut rows = vec![Row { x: 0, y: 0, height: 0 }];
+        let mut rows = vec![Row {
+            x: 0,
+            y: 0,
+            height: 0,
+        }];
         let mut next_remaining = Vec::new();
         let mut wrote_visible = false;
 
@@ -84,7 +88,11 @@ pub fn pack_glyphs(
             let idx = next_remaining[0];
             return Err(FontbakeError::Pack(format!(
                 "glyph U+{:04X} ({}x{}) cannot fit any Hiero row on page ({}x{})",
-                glyphs[idx].codepoint, glyphs[idx].width, glyphs[idx].height, page_width, page_height
+                glyphs[idx].codepoint,
+                glyphs[idx].width,
+                glyphs[idx].height,
+                page_width,
+                page_height
             )));
         }
 

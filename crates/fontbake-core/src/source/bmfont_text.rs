@@ -6,8 +6,8 @@
 //! Reference: <https://www.angelcode.com/products/bmfont/doc/file_format.html>
 
 use crate::model::{
-    BmFont, BmFontChar, BmFontCommon, BmFontInfo, BmFontKerning, BmFontPage,
-    FontbakeError, GlyphRecord, SourceKind,
+    BmFont, BmFontChar, BmFontCommon, BmFontInfo, BmFontKerning, BmFontPage, FontbakeError,
+    GlyphRecord, SourceKind,
 };
 
 /// Parse a text `.fnt` file into a [`BmFont`] structure.
@@ -30,52 +30,52 @@ pub fn parse_fnt(input: &str) -> Result<BmFont, FontbakeError> {
         match tag {
             "info" => {
                 info = Some(BmFontInfo {
-                    face:      get_str(&attrs, "face"),
-                    size:      get_i32(&attrs, "size", line_no)?,
-                    bold:      get_u32(&attrs, "bold", line_no)? != 0,
-                    italic:    get_u32(&attrs, "italic", line_no)? != 0,
-                    charset:   get_str(&attrs, "charset"),
-                    unicode:   get_u32_or(&attrs, "unicode", 0) != 0,
+                    face: get_str(&attrs, "face"),
+                    size: get_i32(&attrs, "size", line_no)?,
+                    bold: get_u32(&attrs, "bold", line_no)? != 0,
+                    italic: get_u32(&attrs, "italic", line_no)? != 0,
+                    charset: get_str(&attrs, "charset"),
+                    unicode: get_u32_or(&attrs, "unicode", 0) != 0,
                     stretch_h: get_u32_or(&attrs, "stretchH", 100),
-                    smooth:    get_u32_or(&attrs, "smooth", 0) != 0,
-                    aa:        get_u32_or(&attrs, "aa", 1),
-                    padding:   parse_csv_i32_4(&attrs, "padding", line_no)?,
-                    spacing:   parse_csv_i32_2(&attrs, "spacing", line_no)?,
+                    smooth: get_u32_or(&attrs, "smooth", 0) != 0,
+                    aa: get_u32_or(&attrs, "aa", 1),
+                    padding: parse_csv_i32_4(&attrs, "padding", line_no)?,
+                    spacing: parse_csv_i32_2(&attrs, "spacing", line_no)?,
                 });
             }
             "common" => {
                 common = Some(BmFontCommon {
                     line_height: get_u32(&attrs, "lineHeight", line_no)?,
-                    base:        get_u32(&attrs, "base", line_no)?,
-                    scale_w:     get_u32(&attrs, "scaleW", line_no)?,
-                    scale_h:     get_u32(&attrs, "scaleH", line_no)?,
-                    pages:       get_u32(&attrs, "pages", line_no)?,
-                    packed:      get_u32_or(&attrs, "packed", 0) != 0,
+                    base: get_u32(&attrs, "base", line_no)?,
+                    scale_w: get_u32(&attrs, "scaleW", line_no)?,
+                    scale_h: get_u32(&attrs, "scaleH", line_no)?,
+                    pages: get_u32(&attrs, "pages", line_no)?,
+                    packed: get_u32_or(&attrs, "packed", 0) != 0,
                 });
             }
             "page" => {
                 pages.push(BmFontPage {
-                    id:   get_u32(&attrs, "id", line_no)?,
+                    id: get_u32(&attrs, "id", line_no)?,
                     file: get_str(&attrs, "file"),
                 });
             }
             "char" => {
                 chars.push(BmFontChar {
-                    id:       get_u32(&attrs, "id", line_no)?,
-                    x:        get_u32(&attrs, "x", line_no)?,
-                    y:        get_u32(&attrs, "y", line_no)?,
-                    width:    get_u32(&attrs, "width", line_no)?,
-                    height:   get_u32(&attrs, "height", line_no)?,
-                    xoffset:  get_i32(&attrs, "xoffset", line_no)?,
-                    yoffset:  get_i32(&attrs, "yoffset", line_no)?,
+                    id: get_u32(&attrs, "id", line_no)?,
+                    x: get_u32(&attrs, "x", line_no)?,
+                    y: get_u32(&attrs, "y", line_no)?,
+                    width: get_u32(&attrs, "width", line_no)?,
+                    height: get_u32(&attrs, "height", line_no)?,
+                    xoffset: get_i32(&attrs, "xoffset", line_no)?,
+                    yoffset: get_i32(&attrs, "yoffset", line_no)?,
                     xadvance: get_i32(&attrs, "xadvance", line_no)?,
-                    page:     get_u32(&attrs, "page", line_no)?,
-                    chnl:     get_u32_or(&attrs, "chnl", 0),
+                    page: get_u32(&attrs, "page", line_no)?,
+                    chnl: get_u32_or(&attrs, "chnl", 0),
                 });
             }
             "kerning" => {
                 kernings.push(BmFontKerning {
-                    first:  get_u32(&attrs, "first", line_no)?,
+                    first: get_u32(&attrs, "first", line_no)?,
                     second: get_u32(&attrs, "second", line_no)?,
                     amount: get_i32(&attrs, "amount", line_no)? as i16,
                 });
@@ -136,7 +136,9 @@ pub fn bmfont_to_glyphs(
             if page_idx >= page_images.len() {
                 return Err(FontbakeError::BmfontParse(format!(
                     "char id={} references page {} but only {} pages loaded",
-                    ch.id, ch.page, page_images.len()
+                    ch.id,
+                    ch.page,
+                    page_images.len()
                 )));
             }
             let (pw, _ph, pixels) = &page_images[page_idx];
@@ -241,7 +243,10 @@ fn get_u32(attrs: &[(&str, &str)], key: &str, line_no: usize) -> Result<u32, Fon
             FontbakeError::BmfontParse(format!("line {}: missing key '{key}'", line_no + 1))
         })?;
     val.parse::<u32>().map_err(|_| {
-        FontbakeError::BmfontParse(format!("line {}: invalid u32 for '{key}': {val}", line_no + 1))
+        FontbakeError::BmfontParse(format!(
+            "line {}: invalid u32 for '{key}': {val}",
+            line_no + 1
+        ))
     })
 }
 
@@ -262,7 +267,10 @@ fn get_i32(attrs: &[(&str, &str)], key: &str, line_no: usize) -> Result<i32, Fon
             FontbakeError::BmfontParse(format!("line {}: missing key '{key}'", line_no + 1))
         })?;
     val.parse::<i32>().map_err(|_| {
-        FontbakeError::BmfontParse(format!("line {}: invalid i32 for '{key}': {val}", line_no + 1))
+        FontbakeError::BmfontParse(format!(
+            "line {}: invalid i32 for '{key}': {val}",
+            line_no + 1
+        ))
     })
 }
 
@@ -287,10 +295,7 @@ fn parse_csv_i32_4(
     let mut out = [0i32; 4];
     for (i, p) in parts.iter().enumerate() {
         out[i] = p.parse::<i32>().map_err(|_| {
-            FontbakeError::BmfontParse(format!(
-                "line {}: invalid i32 in '{key}': {p}",
-                line_no + 1
-            ))
+            FontbakeError::BmfontParse(format!("line {}: invalid i32 in '{key}': {p}", line_no + 1))
         })?;
     }
     Ok(out)
@@ -317,10 +322,7 @@ fn parse_csv_i32_2(
     let mut out = [0i32; 2];
     for (i, p) in parts.iter().enumerate() {
         out[i] = p.parse::<i32>().map_err(|_| {
-            FontbakeError::BmfontParse(format!(
-                "line {}: invalid i32 in '{key}': {p}",
-                line_no + 1
-            ))
+            FontbakeError::BmfontParse(format!("line {}: invalid i32 in '{key}': {p}", line_no + 1))
         })?;
     }
     Ok(out)

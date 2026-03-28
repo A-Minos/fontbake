@@ -1,2 +1,2 @@
-pub mod java_shape;
 pub mod hinted_bounds;
+pub mod java_shape;

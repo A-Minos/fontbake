@@ -160,18 +160,8 @@ mod tests {
         g.source_kind = SourceKind::BitmapImport;
         let set = vec![g];
 
-        let result = merge_fonts(
-            &[&set],
-            "test",
-            12,
-            14,
-            10,
-            128,
-            128,
-            [0, 0, 0, 0],
-            [0, 0],
-        )
-        .unwrap();
+        let result =
+            merge_fonts(&[&set], "test", 12, 14, 10, 128, 128, [0, 0, 0, 0], [0, 0]).unwrap();
 
         assert_eq!(result.glyphs[0].source_kind, SourceKind::BitmapImport);
     }
