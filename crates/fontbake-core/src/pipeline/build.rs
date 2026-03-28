@@ -17,6 +17,8 @@ use crate::model::{
 };
 use crate::pack::hiero_rows::pack_glyphs;
 use crate::raster::java_shape::{advance_width_px, rasterize_glyph, rasterize_glyph_in_layout};
+#[cfg(feature = "freetype")]
+use crate::raster::freetype_bounds::{FreetypeFont, HintedVerticalBounds};
 use crate::source::outline::{resolve_codepoint, OutlineFont};
 
 /// Named font data for the pipeline — bytes + identifier.
@@ -118,6 +120,24 @@ pub fn build_from_config(
         .map(|cp| resolve_glyph_plan(&font_chain, cp))
         .collect();
 
+    // When freetype feature is enabled, load FreeType faces for hinted bounds.
+    // We need one per font in the chain since glyphs may come from different fonts.
+    #[cfg(feature = "freetype")]
+    let ft_fonts: Vec<Option<FreetypeFont>> = {
+        let mut fts = Vec::new();
+        // Primary font
+        fts.push(
+            FreetypeFont::load(primary_font_data, spec.font_size as u32).ok(),
+        );
+        // Fallback fonts
+        for (data, _name) in fallback_font_data {
+            fts.push(
+                FreetypeFont::load(data, spec.font_size as u32).ok(),
+            );
+        }
+        fts
+    };
+
     let mut glyphs: Vec<GlyphRecord> = Vec::with_capacity(resolved_glyphs.len());
 
     for resolved in &resolved_glyphs {
@@ -126,7 +146,28 @@ pub fn build_from_config(
         let source_id = font.source_id.clone();
 
         // --- Measure glyph at 1x for Java-compatible layout metrics ---
+        // When freetype is available, use hinted pixel bounds (matches Java AWT).
+        // Otherwise fall back to unhinted rasterize + crop.
         let measure = rasterize_glyph(font, resolved.glyph_id, size_px, 1)?;
+
+        #[cfg(feature = "freetype")]
+        let measure = {
+            // Use FreeType hinted bounds for vertical direction only.
+            // FreeType and Java agree on vertical hinting, but differ on horizontal.
+            let hinted: Option<HintedVerticalBounds> = ft_fonts
+                .get(resolved.font_idx)
+                .and_then(|ft| ft.as_ref())
+                .and_then(|ft| ft.hinted_vertical_bounds(cp as u32).ok().flatten());
+
+            match (measure, hinted) {
+                (Some(mut m), Some(hb)) => {
+                    m.bearing_y = hb.y;
+                    m.height = hb.height;
+                    Some(m)
+                }
+                (m, _) => m,
+            }
+        };
 
         let mut rec = GlyphRecord::new(cp as u32, SourceKind::Outline, source_id);
         let raw_adv = advance_width_px(font, resolved.glyph_id, size_px);
