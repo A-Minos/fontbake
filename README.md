@@ -190,12 +190,13 @@ fontbake inspect some-font.fnt | jq '.chars | length'
 
 ## WASM API
 
-`fontbake-wasm` 暴露四个接口：
+`fontbake-wasm` 暴露五个接口：
 
 - `parse_hiero(config_text) -> string`
 - `parse_bmfont(fnt_text) -> string`
 - `build_font(config_text, primary_font, fallback_fonts_json) -> object`
 - `import_bmfont(fnt_text, png_pages_json, source_id) -> object`
+- `merge_fonts(glyph_sets_json, merge_config_json) -> object`
 
 ### parse_hiero
 
@@ -245,6 +246,30 @@ const result = import_bmfont(fntText, pngPagesJson, 'source-id');
 console.log(result.bmfont_json);
 console.log(result.glyph_count);
 ```
+
+### merge_fonts
+
+```javascript
+const glyphSetsJson = JSON.stringify([glyphSetA, glyphSetB]);
+const mergeConfigJson = JSON.stringify({
+  face: 'combined',
+  font_size: 52,
+  line_height: 57,
+  base: 38,
+  page_width: 1024,
+  page_height: 1024,
+  padding: [4, 4, 4, 4],
+  spacing: [-8, -8],
+});
+
+const result = merge_fonts(glyphSetsJson, mergeConfigJson);
+
+console.log(result.fnt_text);
+console.log(result.page_pngs);
+console.log(result.glyph_count);
+```
+
+按输入顺序决定优先级，同一 codepoint 冲突时第一个源胜出。
 
 ## 输出格式
 
