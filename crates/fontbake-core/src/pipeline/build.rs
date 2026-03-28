@@ -17,8 +17,7 @@ use crate::model::{
 };
 use crate::pack::hiero_rows::pack_glyphs;
 use crate::raster::java_shape::{advance_width_px, rasterize_glyph, rasterize_glyph_in_layout};
-#[cfg(feature = "freetype")]
-use crate::raster::freetype_bounds::{FreetypeFont, HintedVerticalBounds};
+use crate::raster::hinted_bounds::HintedFont;
 use crate::source::outline::{resolve_codepoint, OutlineFont};
 
 /// Named font data for the pipeline — bytes + identifier.
@@ -120,20 +119,13 @@ pub fn build_from_config(
         .map(|cp| resolve_glyph_plan(&font_chain, cp))
         .collect();
 
-    // When freetype feature is enabled, load FreeType faces for hinted bounds.
-    // We need one per font in the chain since glyphs may come from different fonts.
-    #[cfg(feature = "freetype")]
-    let ft_fonts: Vec<Option<FreetypeFont>> = {
+    // Load skrifa hinted fonts for each font in the chain.
+    // Used for hinted vertical bounds that match Java AWT's getGlyphPixelBounds.
+    let hinted_fonts: Vec<Option<HintedFont<'_>>> = {
         let mut fts = Vec::new();
-        // Primary font
-        fts.push(
-            FreetypeFont::load(primary_font_data, spec.font_size as u32).ok(),
-        );
-        // Fallback fonts
+        fts.push(HintedFont::load(primary_font_data, spec.font_size as u32).ok());
         for (data, _name) in fallback_font_data {
-            fts.push(
-                FreetypeFont::load(data, spec.font_size as u32).ok(),
-            );
+            fts.push(HintedFont::load(data, spec.font_size as u32).ok());
         }
         fts
     };
@@ -146,15 +138,11 @@ pub fn build_from_config(
         let source_id = font.source_id.clone();
 
         // --- Measure glyph at 1x for Java-compatible layout metrics ---
-        // When freetype is available, use hinted pixel bounds (matches Java AWT).
-        // Otherwise fall back to unhinted rasterize + crop.
+        // Unhinted bounds from tiny-skia rasterization (used for horizontal metrics).
+        // Then overlay hinted vertical bounds from skrifa (matches Java AWT).
         let measure = rasterize_glyph(font, resolved.glyph_id, size_px, 1)?;
-
-        #[cfg(feature = "freetype")]
         let measure = {
-            // Use FreeType hinted bounds for vertical direction only.
-            // FreeType and Java agree on vertical hinting, but differ on horizontal.
-            let hinted: Option<HintedVerticalBounds> = ft_fonts
+            let hinted = hinted_fonts
                 .get(resolved.font_idx)
                 .and_then(|ft| ft.as_ref())
                 .and_then(|ft| ft.hinted_vertical_bounds(cp as u32).ok().flatten());

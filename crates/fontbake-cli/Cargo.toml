@@ -8,7 +8,7 @@ name = "fontbake"
 path = "src/main.rs"
 
 [dependencies]
-fontbake-core = { path = "../fontbake-core", features = ["freetype"] }
+fontbake-core = { path = "../fontbake-core" }
 clap.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true

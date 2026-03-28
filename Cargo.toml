@@ -22,8 +22,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Structured error types
 thiserror = "2"
-# FreeType bindings for hinted glyph metrics (optional, not WASM-compatible)
-freetype-rs = "0.38"
+# Pure-Rust font engine with TrueType hinting (WASM-compatible)
+skrifa = "0.29"
 # CLI argument parsing (CLI crate only)
 clap = { version = "4", features = ["derive"] }
 # WASM bindings (WASM crate only)
