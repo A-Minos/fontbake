@@ -234,17 +234,19 @@ mod tests {
 
     #[test]
     fn page_overflow() {
-        // 4 glyphs of 32x32 in a 64x64 page → all fit on one page (2x2 grid)
+        // Hiero uses strict `<` for fit checks (row.x + width >= pageWidth rejects),
+        // so page must be at least 1px wider/taller than the total glyph extent.
+        // 4 glyphs of 32x32 in a 65x65 page → all fit on one page (2x2 grid)
         let mut glyphs = vec![
             make_glyph(65, 32, 32),
             make_glyph(66, 32, 32),
             make_glyph(67, 32, 32),
             make_glyph(68, 32, 32),
         ];
-        let pages = pack_glyphs(&mut glyphs, 64, 64).unwrap();
+        let pages = pack_glyphs(&mut glyphs, 65, 65).unwrap();
         assert_eq!(pages.len(), 1);
 
-        // 5th glyph should overflow to page 1
+        // 5th glyph should overflow to page 2
         let mut glyphs = vec![
             make_glyph(65, 32, 32),
             make_glyph(66, 32, 32),
@@ -252,7 +254,7 @@ mod tests {
             make_glyph(68, 32, 32),
             make_glyph(69, 32, 32),
         ];
-        let pages = pack_glyphs(&mut glyphs, 64, 64).unwrap();
+        let pages = pack_glyphs(&mut glyphs, 65, 65).unwrap();
         assert_eq!(pages.len(), 2);
     }
 
