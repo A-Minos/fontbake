@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "fontbake-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "fontbake-core",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "fontbake-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "png",
  "serde",
@@ -216,7 +216,7 @@ dependencies = [
 
 [[package]]
 name = "fontbake-wasm"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "fontbake-core",
  "serde",
