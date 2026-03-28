@@ -47,8 +47,8 @@ pub fn build_font(
         fontbake_core::pipeline::build::build_from_config(&spec, primary_font, &fallback_refs)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-    let glyphs_json = serde_json::to_string(&result.glyphs)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let glyphs_json =
+        serde_json::to_string(&result.glyphs).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
     let output = BuildOutput {
         fnt_text: result.fnt_text,
@@ -88,8 +88,8 @@ pub fn import_bmfont(
         fontbake_core::pipeline::import::import_bmfont(fnt_text, &pages, source_id)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-    let glyphs_json = serde_json::to_string(&glyphs)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let glyphs_json =
+        serde_json::to_string(&glyphs).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
     let output = ImportOutput {
         bmfont_json: serde_json::to_string(&bmfont).unwrap_or_default(),
@@ -136,8 +136,8 @@ pub fn merge_fonts(glyph_sets_json: &str, merge_config_json: &str) -> Result<JsV
     )
     .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-    let glyphs_json = serde_json::to_string(&result.glyphs)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let glyphs_json =
+        serde_json::to_string(&result.glyphs).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
     let output = BuildOutput {
         fnt_text: result.fnt_text,
