@@ -96,6 +96,54 @@ pub fn import_bmfont(
     serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// Merge multiple glyph sets into a single font output.
+///
+/// # Arguments
+/// - `glyph_sets_json` — JSON array of glyph-set arrays: `[[GlyphRecord, ...], ...]`
+///   (ordered by priority — first set wins on codepoint conflicts)
+/// - `merge_config_json` — JSON object with merge parameters:
+///   `{ "face": "...", "font_size": N, "line_height": N, "base": N,
+///      "page_width": N, "page_height": N, "padding": [T,R,B,L], "spacing": [H,V] }`
+///
+/// # Returns
+/// JSON object: `{ "fnt_text": "...", "page_pngs": [[u8...], ...], "glyph_count": N }`
+#[wasm_bindgen]
+pub fn merge_fonts(
+    glyph_sets_json: &str,
+    merge_config_json: &str,
+) -> Result<JsValue, JsValue> {
+    let glyph_sets: Vec<Vec<fontbake_core::model::GlyphRecord>> =
+        serde_json::from_str(glyph_sets_json)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse glyph_sets: {e}")))?;
+
+    let config: MergeConfig = serde_json::from_str(merge_config_json)
+        .map_err(|e| JsValue::from_str(&format!("Failed to parse merge_config: {e}")))?;
+
+    let set_refs: Vec<&[fontbake_core::model::GlyphRecord]> =
+        glyph_sets.iter().map(|s| s.as_slice()).collect();
+
+    let result = fontbake_core::pipeline::merge::merge_fonts(
+        &set_refs,
+        &config.face,
+        config.font_size,
+        config.line_height,
+        config.base,
+        config.page_width,
+        config.page_height,
+        config.padding,
+        config.spacing,
+    )
+    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    let output = BuildOutput {
+        fnt_text: result.fnt_text,
+        page_pngs: result.page_pngs,
+        glyph_count: result.glyphs.len(),
+    };
+
+    serde_wasm_bindgen::to_value(&output).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // Internal types for JSON serialization
 // ---------------------------------------------------------------------------
@@ -117,4 +165,16 @@ struct BuildOutput {
 struct ImportOutput {
     bmfont_json: String,
     glyph_count: usize,
+}
+
+#[derive(serde::Deserialize)]
+struct MergeConfig {
+    face: String,
+    font_size: i32,
+    line_height: u32,
+    base: u32,
+    page_width: u32,
+    page_height: u32,
+    padding: [i32; 4],
+    spacing: [i32; 2],
 }
