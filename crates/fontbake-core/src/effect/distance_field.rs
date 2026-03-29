@@ -15,8 +15,15 @@
 use crate::model::FontbakeError;
 
 struct RowIndex {
-    inside_xs: Vec<u32>,
-    outside_xs: Vec<u32>,
+    inside_start: usize,
+    inside_len: usize,
+    outside_start: usize,
+    outside_len: usize,
+}
+
+struct RowIndexTable {
+    rows: Vec<RowIndex>,
+    xs: Vec<u32>,
 }
 
 /// Configuration for the distance field generator.
@@ -109,30 +116,41 @@ fn sample_mask(mask: &[u8], w: u32, h: u32, x: f32, y: f32) -> u8 {
     mask[(iy * w + ix) as usize]
 }
 
-fn build_row_index(mask: &[u8], mask_w: u32, mask_h: u32) -> Vec<RowIndex> {
+fn build_row_index(mask: &[u8], mask_w: u32, mask_h: u32) -> RowIndexTable {
     let mut rows = Vec::with_capacity(mask_h as usize);
+    let mut xs = Vec::with_capacity((mask_w * mask_h) as usize);
     for y in 0..mask_h {
-        let mut inside_xs = Vec::new();
-        let mut outside_xs = Vec::new();
         let row_start = (y * mask_w) as usize;
         let row_end = row_start + mask_w as usize;
+
+        let inside_start = xs.len();
         for (x, &val) in mask[row_start..row_end].iter().enumerate() {
             if val >= 128 {
-                inside_xs.push(x as u32);
-            } else {
-                outside_xs.push(x as u32);
+                xs.push(x as u32);
             }
         }
+        let inside_len = xs.len() - inside_start;
+
+        let outside_start = xs.len();
+        for (x, &val) in mask[row_start..row_end].iter().enumerate() {
+            if val < 128 {
+                xs.push(x as u32);
+            }
+        }
+        let outside_len = xs.len() - outside_start;
+
         rows.push(RowIndex {
-            inside_xs,
-            outside_xs,
+            inside_start,
+            inside_len,
+            outside_start,
+            outside_len,
         });
     }
-    rows
+    RowIndexTable { rows, xs }
 }
 
 fn find_min_edge_distance(
-    row_index: &[RowIndex],
+    row_index: &RowIndexTable,
     w: u32,
     h: u32,
     cx: u32,
@@ -155,11 +173,13 @@ fn find_min_edge_distance(
             continue;
         }
 
-        let xs = if inside {
-            &row_index[sy as usize].outside_xs
+        let row = &row_index.rows[sy as usize];
+        let (xs_start, xs_len) = if inside {
+            (row.outside_start, row.outside_len)
         } else {
-            &row_index[sy as usize].inside_xs
+            (row.inside_start, row.inside_len)
         };
+        let xs = &row_index.xs[xs_start..xs_start + xs_len];
         if xs.is_empty() {
             continue;
         }
@@ -465,5 +485,27 @@ mod tests {
         };
 
         assert_matches_reference(&mask, mask_w, mask_h, &config);
+    }
+
+    #[test]
+    fn build_row_index_packs_positions_into_single_contiguous_buffer() {
+        let mask_w = 8u32;
+        let mask_h = 4u32;
+        let mask = vec![
+            255, 255, 255, 255, 255, 255, 255, 0,
+            0, 0, 0, 0, 255, 0, 0, 0,
+            255, 0, 255, 0, 255, 0, 255, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+
+        let table = build_row_index(&mask, mask_w, mask_h);
+        let stored_positions: usize = table
+            .rows
+            .iter()
+            .map(|row| row.inside_len + row.outside_len)
+            .sum();
+
+        assert_eq!(stored_positions, mask.len());
+        assert_eq!(table.xs.len(), mask.len());
     }
 }
