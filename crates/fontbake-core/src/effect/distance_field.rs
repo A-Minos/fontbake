@@ -423,7 +423,12 @@ mod tests {
         assert!(outside_alpha < 128);
     }
 
-    fn assert_matches_reference(mask: &[u8], mask_w: u32, mask_h: u32, config: &DistanceFieldConfig) {
+    fn assert_matches_reference(
+        mask: &[u8],
+        mask_w: u32,
+        mask_h: u32,
+        config: &DistanceFieldConfig,
+    ) {
         let expected = reference_generate_distance_field(mask, mask_w, mask_h, config);
         let actual = generate_distance_field(mask, mask_w, mask_h, config).unwrap();
         assert_eq!(actual, expected);
@@ -503,10 +508,8 @@ mod tests {
         let mask_w = 8u32;
         let mask_h = 4u32;
         let mask = vec![
-            255, 255, 255, 255, 255, 255, 255, 0,
-            0, 0, 0, 0, 255, 0, 0, 0,
-            255, 0, 255, 0, 255, 0, 255, 0,
-            0, 0, 0, 0, 0, 0, 0, 0,
+            255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 255, 0, 0, 0, 255, 0, 255, 0, 255, 0,
+            255, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ];
 
         let table = build_row_index(&mask, mask_w, mask_h);

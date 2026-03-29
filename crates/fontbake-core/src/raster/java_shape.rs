@@ -32,7 +32,10 @@ pub struct RasterResult {
     pub bearing_y: i32,
 }
 
-pub fn load_glyph_outline(font: &OutlineFont<'_>, glyph_id: ttf_parser::GlyphId) -> Option<GlyphOutline> {
+pub fn load_glyph_outline(
+    font: &OutlineFont<'_>,
+    glyph_id: ttf_parser::GlyphId,
+) -> Option<GlyphOutline> {
     let commands = font.outline_glyph(glyph_id)?;
     if commands.is_empty() {
         return None;
@@ -58,7 +61,12 @@ pub fn rasterize_glyph(
         Some(outline) => outline,
         None => return Ok(None),
     };
-    Ok(Some(rasterize_outline(&outline, font.units_per_em, size_px, scale_factor)?))
+    Ok(Some(rasterize_outline(
+        &outline,
+        font.units_per_em,
+        size_px,
+        scale_factor,
+    )?))
 }
 
 /// Rasterise a glyph outline into a fixed logical layout frame.
@@ -116,7 +124,9 @@ pub fn rasterize_outline(
     let width = (x_max - x_min).max(1) as u32;
     let height = (y_max - y_min).max(1) as u32;
     if width > 8192 || height > 8192 {
-        return Err(FontbakeError::FontLoad(format!("glyph raster too large: {width}x{height}")));
+        return Err(FontbakeError::FontLoad(format!(
+            "glyph raster too large: {width}x{height}"
+        )));
     }
 
     let path = build_outline_path(&outline.commands, scale, -x_min as f32, -y_min as f32)?;
@@ -152,7 +162,9 @@ pub fn rasterize_outline_in_layout(
         .checked_mul(scale_factor)
         .ok_or_else(|| FontbakeError::FontLoad("layout canvas height overflow".into()))?;
     if canvas_w > 8192 || canvas_h > 8192 {
-        return Err(FontbakeError::FontLoad(format!("glyph raster too large: {canvas_w}x{canvas_h}")));
+        return Err(FontbakeError::FontLoad(format!(
+            "glyph raster too large: {canvas_w}x{canvas_h}"
+        )));
     }
 
     let scale = (size_px * scale_factor as f32) / units_per_em as f32;
