@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "profiling")]
-use pprof::{protos::Message, ProfilerGuard};
+use pprof::{ProfilerGuard, protos::Message};
 
 #[derive(Parser)]
 #[command(name = "fontbake", about = "Font build tool — CLI")]

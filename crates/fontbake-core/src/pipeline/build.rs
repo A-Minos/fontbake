@@ -410,15 +410,22 @@ fn write_stage_timings(
 
     let mut output = String::new();
     for timing in stage_timings {
-        output.push_str(&format!("{}\t{:.3} ms\n", timing.name, timing.elapsed.as_secs_f64() * 1000.0));
+        output.push_str(&format!(
+            "{}\t{:.3} ms\n",
+            timing.name,
+            timing.elapsed.as_secs_f64() * 1000.0
+        ));
     }
 
     let timings_path = profile_dir.join("stage-times.txt");
-    std::fs::write(&timings_path, output)
-        .map_err(|e| FontbakeError::Io(format!("write stage timings {}: {e}", timings_path.display())))?;
+    std::fs::write(&timings_path, output).map_err(|e| {
+        FontbakeError::Io(format!(
+            "write stage timings {}: {e}",
+            timings_path.display()
+        ))
+    })?;
     Ok(())
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct JavaGlyphLayout {
