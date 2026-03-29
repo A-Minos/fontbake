@@ -16,6 +16,11 @@ use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
 use crate::model::FontbakeError;
 use crate::source::outline::{OutlineFont, PathCommand};
 
+pub struct GlyphOutline {
+    pub commands: Vec<PathCommand>,
+    pub bbox: ttf_parser::Rect,
+}
+
 /// Result of rasterising a single glyph.
 pub struct RasterResult {
     /// 8-bit alpha mask (width × height bytes, row-major, top-to-bottom).
@@ -25,6 +30,15 @@ pub struct RasterResult {
     /// Offset from the glyph origin to the top-left of the mask, in pixels.
     pub bearing_x: i32,
     pub bearing_y: i32,
+}
+
+pub fn load_glyph_outline(font: &OutlineFont<'_>, glyph_id: ttf_parser::GlyphId) -> Option<GlyphOutline> {
+    let commands = font.outline_glyph(glyph_id)?;
+    if commands.is_empty() {
+        return None;
+    }
+    let bbox = font.glyph_bbox(glyph_id)?;
+    Some(GlyphOutline { commands, bbox })
 }
 
 /// Rasterise a glyph outline into an alpha mask at the given pixel size.
@@ -40,53 +54,11 @@ pub fn rasterize_glyph(
     size_px: f32,
     scale_factor: u32,
 ) -> Result<Option<RasterResult>, FontbakeError> {
-    let commands = match font.outline_glyph(glyph_id) {
-        Some(c) if !c.is_empty() => c,
-        _ => return Ok(None),
-    };
-
-    let bbox = match font.glyph_bbox(glyph_id) {
-        Some(b) => b,
+    let outline = match load_glyph_outline(font, glyph_id) {
+        Some(outline) => outline,
         None => return Ok(None),
     };
-
-    let upem = font.units_per_em as f32;
-    let target_size = size_px * scale_factor as f32;
-    let scale = target_size / upem;
-
-    // Compute pixel bounds at the upscaled resolution.
-    // Java Hiero rasterizes at 1x then upscales, but computing at 32x
-    // and dividing gives closer SDF output dimensions due to how integer
-    // division naturally tightens the bounds (matching Java's pixel-tight
-    // getGlyphPixelBounds behaviour).
-    let x_min = (bbox.x_min as f32 * scale).floor() as i32;
-    let y_min = (-(bbox.y_max as f32) * scale).floor() as i32; // Y flip
-    let x_max = (bbox.x_max as f32 * scale).ceil() as i32;
-    let y_max = (-(bbox.y_min as f32) * scale).ceil() as i32;
-
-    let width = (x_max - x_min).max(1) as u32;
-    let height = (y_max - y_min).max(1) as u32;
-
-    // Safety limit to prevent OOM on degenerate glyphs
-    if width > 8192 || height > 8192 {
-        return Err(FontbakeError::FontLoad(format!(
-            "glyph raster too large: {width}x{height}"
-        )));
-    }
-
-    let path = build_outline_path(&commands, scale, -x_min as f32, -y_min as f32)?;
-    let mask = render_binary_mask(&path, width, height)?;
-
-    // Crop to tight bounds (match Java getGlyphPixelBounds)
-    let (cropped_mask, crop_x, crop_y, crop_w, crop_h) = crop_to_content(&mask, width, height);
-
-    Ok(Some(RasterResult {
-        mask: cropped_mask,
-        width: crop_w,
-        height: crop_h,
-        bearing_x: x_min + crop_x as i32,
-        bearing_y: y_min + crop_y as i32,
-    }))
+    Ok(Some(rasterize_outline(&outline, font.units_per_em, size_px, scale_factor)?))
 }
 
 /// Rasterise a glyph outline into a fixed logical layout frame.
@@ -107,11 +79,71 @@ pub fn rasterize_glyph_in_layout(
     pad_left: u32,
     pad_top: u32,
 ) -> Result<Option<Vec<u8>>, FontbakeError> {
-    let commands = match font.outline_glyph(glyph_id) {
-        Some(c) if !c.is_empty() => c,
-        _ => return Ok(None),
+    let outline = match load_glyph_outline(font, glyph_id) {
+        Some(outline) => outline,
+        None => return Ok(None),
     };
+    rasterize_outline_in_layout(
+        &outline,
+        font.units_per_em,
+        size_px,
+        scale_factor,
+        layout_width,
+        layout_height,
+        bounds_x_1x,
+        bounds_y_1x,
+        pad_left,
+        pad_top,
+    )
+    .map(Some)
+}
 
+pub fn rasterize_outline(
+    outline: &GlyphOutline,
+    units_per_em: u16,
+    size_px: f32,
+    scale_factor: u32,
+) -> Result<RasterResult, FontbakeError> {
+    let upem = units_per_em as f32;
+    let target_size = size_px * scale_factor as f32;
+    let scale = target_size / upem;
+
+    let x_min = (outline.bbox.x_min as f32 * scale).floor() as i32;
+    let y_min = (-(outline.bbox.y_max as f32) * scale).floor() as i32;
+    let x_max = (outline.bbox.x_max as f32 * scale).ceil() as i32;
+    let y_max = (-(outline.bbox.y_min as f32) * scale).ceil() as i32;
+
+    let width = (x_max - x_min).max(1) as u32;
+    let height = (y_max - y_min).max(1) as u32;
+    if width > 8192 || height > 8192 {
+        return Err(FontbakeError::FontLoad(format!("glyph raster too large: {width}x{height}")));
+    }
+
+    let path = build_outline_path(&outline.commands, scale, -x_min as f32, -y_min as f32)?;
+    let mask = render_binary_mask(&path, width, height)?;
+    let (cropped_mask, crop_x, crop_y, crop_w, crop_h) = crop_to_content(&mask, width, height);
+
+    Ok(RasterResult {
+        mask: cropped_mask,
+        width: crop_w,
+        height: crop_h,
+        bearing_x: x_min + crop_x as i32,
+        bearing_y: y_min + crop_y as i32,
+    })
+}
+
+pub fn rasterize_outline_in_layout(
+    outline: &GlyphOutline,
+    units_per_em: u16,
+    size_px: f32,
+    scale_factor: u32,
+    layout_width: u32,
+    layout_height: u32,
+    bounds_x_1x: i32,
+    bounds_y_1x: i32,
+    pad_left: u32,
+    pad_top: u32,
+) -> Result<Vec<u8>, FontbakeError> {
     let scale_factor = scale_factor.max(1);
     let canvas_w = layout_width
         .checked_mul(scale_factor)
@@ -120,17 +152,14 @@ pub fn rasterize_glyph_in_layout(
         .checked_mul(scale_factor)
         .ok_or_else(|| FontbakeError::FontLoad("layout canvas height overflow".into()))?;
     if canvas_w > 8192 || canvas_h > 8192 {
-        return Err(FontbakeError::FontLoad(format!(
-            "glyph raster too large: {canvas_w}x{canvas_h}"
-        )));
+        return Err(FontbakeError::FontLoad(format!("glyph raster too large: {canvas_w}x{canvas_h}")));
     }
 
-    let scale = (size_px * scale_factor as f32) / font.units_per_em as f32;
+    let scale = (size_px * scale_factor as f32) / units_per_em as f32;
     let translate_x = (pad_left as i32 - bounds_x_1x) as f32 * scale_factor as f32;
     let translate_y = (pad_top as i32 - bounds_y_1x) as f32 * scale_factor as f32;
-    let path = build_outline_path(&commands, scale, translate_x, translate_y)?;
-    let mask = render_binary_mask(&path, canvas_w, canvas_h)?;
-    Ok(Some(mask))
+    let path = build_outline_path(&outline.commands, scale, translate_x, translate_y)?;
+    render_binary_mask(&path, canvas_w, canvas_h)
 }
 
 fn build_outline_path(

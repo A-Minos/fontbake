@@ -15,8 +15,11 @@ use crate::export::bmfont_text::{encode_atlas_png, glyphs_to_fnt};
 use crate::model::{BuildResult, BuildSpec, EffectSpec, FontbakeError, GlyphRecord, SourceKind};
 use crate::pack::hiero_rows::pack_glyphs;
 use crate::raster::hinted_bounds::HintedFont;
-use crate::raster::java_shape::{advance_width_px, rasterize_glyph, rasterize_glyph_in_layout};
+use crate::raster::java_shape::{
+    advance_width_px, load_glyph_outline, rasterize_outline, rasterize_outline_in_layout,
+};
 use crate::source::outline::{OutlineFont, resolve_codepoint};
+use rayon::prelude::*;
 
 #[cfg(feature = "profiling")]
 use std::path::Path;
@@ -165,137 +168,142 @@ fn build_from_config_impl(
     #[cfg(feature = "profiling")]
     let rasterize_and_sdf = StageTimer::start("03-rasterize-and-sdf");
 
-    for resolved in &resolved_glyphs {
-        let cp = resolved.codepoint;
-        let font = font_chain[resolved.font_idx];
-        let source_id = font.source_id.clone();
+    let config = DistanceFieldConfig {
+        scale: df_scale,
+        spread: df_spread,
+        color: df_color,
+    };
 
-        // --- Measure glyph at 1x for Java-compatible layout metrics ---
-        // Unhinted bounds from tiny-skia rasterization (used for horizontal metrics).
-        // Then overlay hinted vertical bounds from skrifa (matches Java AWT).
-        let measure = rasterize_glyph(font, resolved.glyph_id, size_px, 1)?;
-        let measure = {
-            let hinted = hinted_fonts
-                .get(resolved.font_idx)
-                .and_then(|ft| ft.as_ref())
-                .and_then(|ft| ft.hinted_vertical_bounds(cp as u32).ok().flatten());
+    let glyph_results: Result<Vec<GlyphRecord>, FontbakeError> = resolved_glyphs
+        .par_iter()
+        .map(|resolved| {
+            let cp = resolved.codepoint;
+            let font = font_chain[resolved.font_idx];
+            let source_id = font.source_id.clone();
 
-            match (measure, hinted) {
-                (Some(mut m), Some(hb)) => {
-                    m.bearing_y = hb.y;
-                    m.height = hb.height;
-                    Some(m)
+            let outline = load_glyph_outline(font, resolved.glyph_id);
+            let measure = match outline.as_ref() {
+                Some(outline) => Some(rasterize_outline(outline, font.units_per_em, size_px, 1)?),
+                None => None,
+            };
+            let measure = {
+                let hinted = hinted_fonts
+                    .get(resolved.font_idx)
+                    .and_then(|ft| ft.as_ref())
+                    .and_then(|ft| ft.hinted_vertical_bounds(cp as u32).ok().flatten());
+
+                match (measure, hinted) {
+                    (Some(mut m), Some(hb)) => {
+                        m.bearing_y = hb.y;
+                        m.height = hb.height;
+                        Some(m)
+                    }
+                    (m, _) => m,
                 }
-                (m, _) => m,
-            }
-        };
+            };
 
-        let mut rec = GlyphRecord::new(cp as u32, SourceKind::Outline, source_id);
-        let raw_adv = advance_width_px(font, resolved.glyph_id, size_px);
+            let mut rec = GlyphRecord::new(cp as u32, SourceKind::Outline, source_id);
+            let raw_adv = advance_width_px(font, resolved.glyph_id, size_px);
 
-        match measure {
-            Some(measure) => {
-                let pad_l = spec.padding.left.max(0) as u32;
-                let pad_t = spec.padding.top.max(0) as u32;
+            match measure {
+                Some(measure) => {
+                    let pad_l = spec.padding.left.max(0) as u32;
+                    let pad_t = spec.padding.top.max(0) as u32;
 
-                let scale_1x = size_px / font.units_per_em as f32;
-                let advance_px =
-                    font.advance_width(resolved.glyph_id).unwrap_or(0) as f32 * scale_1x;
-                let lsb_px =
-                    font.left_side_bearing(resolved.glyph_id).unwrap_or(0) as f32 * scale_1x;
-                let layout = compute_java_layout(
-                    measure.bearing_x,
-                    measure.bearing_y,
-                    measure.width,
-                    measure.height,
-                    lsb_px,
-                    advance_px,
-                    base,
-                    spec.padding.left,
-                    spec.padding.right,
-                    spec.padding.top,
-                    spec.padding.bottom,
-                );
+                    let scale_1x = size_px / font.units_per_em as f32;
+                    let advance_px =
+                        font.advance_width(resolved.glyph_id).unwrap_or(0) as f32 * scale_1x;
+                    let lsb_px =
+                        font.left_side_bearing(resolved.glyph_id).unwrap_or(0) as f32 * scale_1x;
+                    let layout = compute_java_layout(
+                        measure.bearing_x,
+                        measure.bearing_y,
+                        measure.width,
+                        measure.height,
+                        lsb_px,
+                        advance_px,
+                        base,
+                        spec.padding.left,
+                        spec.padding.right,
+                        spec.padding.top,
+                        spec.padding.bottom,
+                    );
 
-                let layout_mask = rasterize_glyph_in_layout(
-                    font,
-                    resolved.glyph_id,
-                    size_px,
-                    df_scale,
-                    layout.width,
-                    layout.height,
-                    measure.bearing_x,
-                    measure.bearing_y,
-                    pad_l,
-                    pad_t,
-                )?
-                .ok_or_else(|| {
-                    FontbakeError::FontLoad(format!(
-                        "glyph U+{:04X} unexpectedly disappeared during layout rasterization",
-                        cp as u32
-                    ))
-                })?;
+                    let layout_mask = rasterize_outline_in_layout(
+                        outline.as_ref().ok_or_else(|| {
+                            FontbakeError::FontLoad(format!(
+                                "glyph U+{:04X} unexpectedly disappeared during layout rasterization",
+                                cp as u32
+                            ))
+                        })?,
+                        font.units_per_em,
+                        size_px,
+                        df_scale,
+                        layout.width,
+                        layout.height,
+                        measure.bearing_x,
+                        measure.bearing_y,
+                        pad_l,
+                        pad_t,
+                    )?;
 
-                let mask_w = layout
-                    .width
-                    .checked_mul(df_scale)
-                    .ok_or_else(|| FontbakeError::Pack("layout mask width overflow".into()))?;
-                let mask_h = layout
-                    .height
-                    .checked_mul(df_scale)
-                    .ok_or_else(|| FontbakeError::Pack("layout mask height overflow".into()))?;
+                    let mask_w = layout
+                        .width
+                        .checked_mul(df_scale)
+                        .ok_or_else(|| FontbakeError::Pack("layout mask width overflow".into()))?;
+                    let mask_h = layout
+                        .height
+                        .checked_mul(df_scale)
+                        .ok_or_else(|| FontbakeError::Pack("layout mask height overflow".into()))?;
 
-                let config = DistanceFieldConfig {
-                    scale: df_scale,
-                    spread: df_spread,
-                    color: df_color,
-                };
-                let (sdf_rgba, sdf_w, sdf_h) =
-                    generate_distance_field(&layout_mask, mask_w, mask_h, &config)?;
-                if sdf_w != layout.width || sdf_h != layout.height {
-                    return Err(FontbakeError::Pack(format!(
-                        "glyph U+{:04X} layout/SDF size mismatch: layout={}x{}, sdf={}x{}",
-                        cp as u32, layout.width, layout.height, sdf_w, sdf_h
-                    )));
+                    let (sdf_rgba, sdf_w, sdf_h) =
+                        generate_distance_field(&layout_mask, mask_w, mask_h, &config)?;
+                    if sdf_w != layout.width || sdf_h != layout.height {
+                        return Err(FontbakeError::Pack(format!(
+                            "glyph U+{:04X} layout/SDF size mismatch: layout={}x{}, sdf={}x{}",
+                            cp as u32, layout.width, layout.height, sdf_w, sdf_h
+                        )));
+                    }
+
+                    rec.bitmap_rgba = sdf_rgba;
+                    rec.width = layout.width;
+                    rec.height = layout.height;
+                    rec.xoffset = layout.xoffset;
+                    rec.yoffset = layout.yoffset;
+                    rec.xadvance =
+                        raw_adv + spec.advance_adjust.x + spec.padding.left + spec.padding.right;
                 }
-
-                rec.bitmap_rgba = sdf_rgba;
-                rec.width = layout.width;
-                rec.height = layout.height;
-                rec.xoffset = layout.xoffset;
-                rec.yoffset = layout.yoffset;
-                rec.xadvance =
-                    raw_adv + spec.advance_adjust.x + spec.padding.left + spec.padding.right;
-            }
-            None => {
-                rec.width = 0;
-                rec.height = 0;
-                rec.xoffset = -spec.padding.left;
-                rec.yoffset = 0;
-                rec.xadvance =
-                    raw_adv + spec.advance_adjust.x + spec.padding.left + spec.padding.right;
-            }
-        }
-
-        // --- Kerning ---
-        if !resolved.missing {
-            for other in &resolved_glyphs {
-                if other.codepoint == cp || !should_emit_kerning(*resolved, *other) {
-                    continue;
+                None => {
+                    rec.width = 0;
+                    rec.height = 0;
+                    rec.xoffset = -spec.padding.left;
+                    rec.yoffset = 0;
+                    rec.xadvance =
+                        raw_adv + spec.advance_adjust.x + spec.padding.left + spec.padding.right;
                 }
-                let kern = font.kern(resolved.glyph_id, other.glyph_id);
-                if kern != 0 {
-                    let scale = size_px / font.units_per_em as f32;
-                    let kern_px = (kern as f32 * scale).round() as i16;
-                    if kern_px != 0 {
-                        rec.kernings.push((other.codepoint as u32, kern_px));
+            }
+
+            if !resolved.missing {
+                for other in &resolved_glyphs {
+                    if other.codepoint == cp || !should_emit_kerning(*resolved, *other) {
+                        continue;
+                    }
+                    let kern = font.kern(resolved.glyph_id, other.glyph_id);
+                    if kern != 0 {
+                        let scale = size_px / font.units_per_em as f32;
+                        let kern_px = (kern as f32 * scale).round() as i16;
+                        if kern_px != 0 {
+                            rec.kernings.push((other.codepoint as u32, kern_px));
+                        }
                     }
                 }
             }
-        }
 
-        glyphs.push(rec);
-    }
+            Ok(rec)
+        })
+        .collect();
+    let glyph_results = glyph_results?;
+    glyphs.extend(glyph_results);
 
     #[cfg(feature = "profiling")]
     stage_timings.push(rasterize_and_sdf.finish());
