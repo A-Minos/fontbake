@@ -2,6 +2,9 @@ use clap::{Parser, Subcommand};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "profiling")]
+use pprof::{protos::Message, ProfilerGuard};
+
 #[derive(Parser)]
 #[command(name = "fontbake", about = "Font build tool — CLI")]
 struct Cli {
@@ -80,6 +83,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 // ---------------------------------------------------------------------------
 
 fn cmd_build(config_path: &Path, output_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "profiling")]
+    let build_profile = BuildProfile::start("build-overall")?;
+
     let config_text = fs::read_to_string(config_path)?;
     let spec = fontbake_core::config::parse_hiero(&config_text)?;
 
@@ -111,6 +117,16 @@ fn cmd_build(config_path: &Path, output_dir: &Path) -> Result<(), Box<dyn std::e
         .map(|(d, n)| (d.as_slice(), n.clone()))
         .collect();
 
+    #[cfg(feature = "profiling")]
+    let profile_dir = build_profile.output_dir().cloned();
+    #[cfg(feature = "profiling")]
+    let result = fontbake_core::pipeline::build::build_from_config_profiled(
+        &spec,
+        &primary_data,
+        &fallback_refs,
+        profile_dir.as_deref(),
+    )?;
+    #[cfg(not(feature = "profiling"))]
     let result =
         fontbake_core::pipeline::build::build_from_config(&spec, &primary_data, &fallback_refs)?;
 
@@ -132,11 +148,97 @@ fn cmd_build(config_path: &Path, output_dir: &Path) -> Result<(), Box<dyn std::e
         println!("  Wrote: {}", png_path.display());
     }
 
+    #[cfg(feature = "profiling")]
+    if let Some(profile_dir) = build_profile.output_dir() {
+        println!("  Profile: {}", profile_dir.display());
+    }
+
     println!(
         "Done: {} glyphs, {} pages",
         result.glyphs.len(),
         result.page_pngs.len()
     );
+
+    #[cfg(feature = "profiling")]
+    build_profile.finish()?;
+
+    Ok(())
+}
+
+#[cfg(feature = "profiling")]
+struct BuildProfile {
+    guard: Option<ProfilerGuard<'static>>,
+    output_dir: Option<PathBuf>,
+    name: &'static str,
+}
+
+#[cfg(feature = "profiling")]
+impl BuildProfile {
+    fn start(name: &'static str) -> Result<Self, Box<dyn std::error::Error>> {
+        let output_dir = profile_output_dir()?;
+        let guard = if output_dir.is_some() {
+            Some(ProfilerGuard::new(1000)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            guard,
+            output_dir,
+            name,
+        })
+    }
+
+    fn output_dir(&self) -> Option<&PathBuf> {
+        self.output_dir.as_ref()
+    }
+
+    fn finish(self) -> Result<(), Box<dyn std::error::Error>> {
+        let Some(guard) = self.guard else {
+            return Ok(());
+        };
+        let Some(output_dir) = self.output_dir else {
+            return Ok(());
+        };
+        write_profile_reports(guard, &output_dir, self.name)
+    }
+}
+
+#[cfg(feature = "profiling")]
+fn profile_output_dir() -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+    if std::env::var_os("FONTBAKE_PROFILE").is_none() {
+        return Ok(None);
+    }
+
+    let base_dir = std::env::var_os("FONTBAKE_PROFILE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target/fontbake-profile"));
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs()
+        .to_string();
+    let output_dir = base_dir.join(timestamp);
+    fs::create_dir_all(&output_dir)?;
+    Ok(Some(output_dir))
+}
+
+#[cfg(feature = "profiling")]
+fn write_profile_reports(
+    guard: ProfilerGuard<'static>,
+    output_dir: &Path,
+    name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let report = guard.report().build()?;
+
+    let flamegraph_path = output_dir.join(format!("{name}.svg"));
+    let flamegraph_file = fs::File::create(&flamegraph_path)?;
+    report.flamegraph(flamegraph_file)?;
+
+    let profile = report.pprof()?;
+    let protobuf_path = output_dir.join(format!("{name}.pb"));
+    let mut protobuf_bytes = Vec::new();
+    profile.write_to_vec(&mut protobuf_bytes)?;
+    fs::write(&protobuf_path, protobuf_bytes)?;
+
     Ok(())
 }
 

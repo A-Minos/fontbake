@@ -14,6 +14,11 @@
 
 use crate::model::FontbakeError;
 
+struct RowIndex {
+    inside_xs: Vec<u32>,
+    outside_xs: Vec<u32>,
+}
+
 /// Configuration for the distance field generator.
 pub struct DistanceFieldConfig {
     /// Upscale factor — the mask was rendered at `scale` × the output size.
@@ -70,22 +75,23 @@ pub fn generate_distance_field(
 
     let spread_scaled = config.spread * scale as f32;
     let [cr, cg, cb] = config.color;
+    let row_index = build_row_index(mask, mask_w, mask_h);
 
     let mut rgba = vec![0u8; (out_w * out_h * 4) as usize];
 
     for oy in 0..out_h {
+        let cy = oy * scale + scale / 2;
         for ox in 0..out_w {
             // Java: centerX = x * downscale + downscale / 2 (integer)
-            let cx = (ox * scale + scale / 2) as f32;
-            let cy = (oy * scale + scale / 2) as f32;
+            let cx = ox * scale + scale / 2;
 
             // Sample the centre of the high-res mask to determine inside/outside
-            let center_val = sample_mask(mask, mask_w, mask_h, cx, cy);
+            let center_val = sample_mask(mask, mask_w, mask_h, cx as f32, cy as f32);
             let inside = center_val >= 128;
 
             // Find minimum distance to an edge within the spread radius
             let min_dist =
-                find_min_edge_distance(mask, mask_w, mask_h, cx, cy, spread_scaled, inside);
+                find_min_edge_distance(&row_index, mask_w, mask_h, cx, cy, spread_scaled, inside);
 
             // Map signed distance to [0, 255]
             // Inside: 128..255, Outside: 0..127, Edge: 128
@@ -113,44 +119,83 @@ fn sample_mask(mask: &[u8], w: u32, h: u32, x: f32, y: f32) -> u8 {
     mask[(iy * w + ix) as usize]
 }
 
+fn build_row_index(mask: &[u8], mask_w: u32, mask_h: u32) -> Vec<RowIndex> {
+    let mut rows = Vec::with_capacity(mask_h as usize);
+    for y in 0..mask_h {
+        let mut inside_xs = Vec::new();
+        let mut outside_xs = Vec::new();
+        let row_start = (y * mask_w) as usize;
+        let row_end = row_start + mask_w as usize;
+        for (x, &val) in mask[row_start..row_end].iter().enumerate() {
+            if val >= 128 {
+                inside_xs.push(x as u32);
+            } else {
+                outside_xs.push(x as u32);
+            }
+        }
+        rows.push(RowIndex {
+            inside_xs,
+            outside_xs,
+        });
+    }
+    rows
+}
+
 /// Find the minimum distance from `(cx, cy)` to the nearest pixel that
 /// has a different inside/outside status, searching within `spread` pixels.
-///
-/// This is the brute-force approach matching libGDX's reference implementation.
 fn find_min_edge_distance(
-    mask: &[u8],
+    row_index: &[RowIndex],
     w: u32,
     h: u32,
-    cx: f32,
-    cy: f32,
+    cx: u32,
+    cy: u32,
     spread: f32,
     inside: bool,
 ) -> f32 {
     // Java: delta = (int)ceil(spread); closestSquareDist = delta * delta
-    let delta = spread.ceil();
-    let mut min_dist_sq = delta * delta;
+    let delta = spread.ceil() as u32;
+    let mut min_dist_sq = (delta * delta) as f32;
 
     // Search box in mask coordinates
-    let delta_i = delta as u32;
-    let x0 = (cx as u32).saturating_sub(delta_i);
-    let y0 = (cy as u32).saturating_sub(delta_i);
-    let x1 = ((cx as u32) + delta_i).min(w.saturating_sub(1));
-    let y1 = ((cy as u32) + delta_i).min(h.saturating_sub(1));
+    let x0 = cx.saturating_sub(delta);
+    let y0 = cy.saturating_sub(delta);
+    let x1 = (cx + delta).min(w.saturating_sub(1));
+    let y1 = (cy + delta).min(h.saturating_sub(1));
 
     for sy in y0..=y1 {
-        for sx in x0..=x1 {
-            let val = mask[(sy * w + sx) as usize];
-            let sample_inside = val >= 128;
+        let dy = sy as f32 - cy as f32;
+        let dy_sq = dy * dy;
+        if dy_sq >= min_dist_sq {
+            continue;
+        }
 
-            if sample_inside != inside {
-                // Java measures distance to pixel top-left corner, not center.
-                let dx = sx as f32 - cx;
-                let dy = sy as f32 - cy;
-                let dist_sq = dx * dx + dy * dy;
-                if dist_sq < min_dist_sq {
-                    min_dist_sq = dist_sq;
-                }
+        let xs = if inside {
+            &row_index[sy as usize].outside_xs
+        } else {
+            &row_index[sy as usize].inside_xs
+        };
+        if xs.is_empty() {
+            continue;
+        }
+
+        let insert_at = xs.partition_point(|&sx| sx < cx);
+        let try_candidate = |sx: u32, min_dist_sq: &mut f32| {
+            if sx < x0 || sx > x1 {
+                return;
             }
+            // Java measures distance to pixel top-left corner, not center.
+            let dx = sx as f32 - cx as f32;
+            let dist_sq = dx * dx + dy_sq;
+            if dist_sq < *min_dist_sq {
+                *min_dist_sq = dist_sq;
+            }
+        };
+
+        if let Some(&sx) = xs.get(insert_at) {
+            try_candidate(sx, &mut min_dist_sq);
+        }
+        if insert_at > 0 {
+            try_candidate(xs[insert_at - 1], &mut min_dist_sq);
         }
     }
 
@@ -166,6 +211,86 @@ fn find_min_edge_distance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn brute_force_find_min_edge_distance(
+        mask: &[u8],
+        w: u32,
+        h: u32,
+        cx: u32,
+        cy: u32,
+        spread: f32,
+        inside: bool,
+    ) -> f32 {
+        let delta = spread.ceil();
+        let mut min_dist_sq = delta * delta;
+        let delta_i = delta as u32;
+        let x0 = cx.saturating_sub(delta_i);
+        let y0 = cy.saturating_sub(delta_i);
+        let x1 = (cx + delta_i).min(w.saturating_sub(1));
+        let y1 = (cy + delta_i).min(h.saturating_sub(1));
+
+        for sy in y0..=y1 {
+            for sx in x0..=x1 {
+                let val = mask[(sy * w + sx) as usize];
+                let sample_inside = val >= 128;
+                if sample_inside != inside {
+                    let dx = sx as f32 - cx as f32;
+                    let dy = sy as f32 - cy as f32;
+                    let dist_sq = dx * dx + dy * dy;
+                    if dist_sq < min_dist_sq {
+                        min_dist_sq = dist_sq;
+                    }
+                }
+            }
+        }
+
+        min_dist_sq.sqrt().min(spread)
+    }
+
+    fn reference_generate_distance_field(
+        mask: &[u8],
+        mask_w: u32,
+        mask_h: u32,
+        config: &DistanceFieldConfig,
+    ) -> (Vec<u8>, u32, u32) {
+        let scale = config.scale.max(1);
+        let out_w = mask_w / scale;
+        let out_h = mask_h / scale;
+        if out_w == 0 || out_h == 0 {
+            return (vec![], 0, 0);
+        }
+
+        let spread_scaled = config.spread * scale as f32;
+        let [cr, cg, cb] = config.color;
+        let mut rgba = vec![0u8; (out_w * out_h * 4) as usize];
+
+        for oy in 0..out_h {
+            let cy = oy * scale + scale / 2;
+            for ox in 0..out_w {
+                let cx = ox * scale + scale / 2;
+                let inside = sample_mask(mask, mask_w, mask_h, cx as f32, cy as f32) >= 128;
+                let min_dist = brute_force_find_min_edge_distance(
+                    mask,
+                    mask_w,
+                    mask_h,
+                    cx,
+                    cy,
+                    spread_scaled,
+                    inside,
+                );
+                let signed_dist = if inside { min_dist } else { -min_dist };
+                let normalised = 0.5 + 0.5 * (signed_dist / spread_scaled);
+                let alpha = (normalised.clamp(0.0, 1.0) * 255.0) as u8;
+                let idx = ((oy * out_w + ox) * 4) as usize;
+                rgba[idx] = cr;
+                rgba[idx + 1] = cg;
+                rgba[idx + 2] = cb;
+                rgba[idx + 3] = alpha;
+            }
+        }
+
+        (rgba, out_w, out_h)
+    }
 
     #[test]
     fn parse_color_white() {
@@ -282,5 +407,30 @@ mod tests {
         // Pixel at x=2 (near right side, outside) should have alpha < 128
         let outside_alpha = rgba[(2 * 4 + 3) as usize];
         assert!(outside_alpha < 128);
+    }
+
+    #[test]
+    fn optimised_search_matches_reference_output() {
+        let mask_w = 13u32;
+        let mask_h = 11u32;
+        let mut mask = vec![0u8; (mask_w * mask_h) as usize];
+        for y in 1..10 {
+            mask[(y * mask_w + 2) as usize] = 255;
+        }
+        for x in 2..11 {
+            mask[(5 * mask_w + x) as usize] = 255;
+        }
+        mask[(2 * mask_w + 9) as usize] = 255;
+        mask[(8 * mask_w + 8) as usize] = 255;
+
+        let config = DistanceFieldConfig {
+            scale: 3,
+            spread: 2.5,
+            color: [0x12, 0x34, 0x56],
+        };
+
+        let expected = reference_generate_distance_field(&mask, mask_w, mask_h, &config);
+        let actual = generate_distance_field(&mask, mask_w, mask_h, &config).unwrap();
+        assert_eq!(actual, expected);
     }
 }

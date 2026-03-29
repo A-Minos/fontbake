@@ -18,6 +18,11 @@ use crate::raster::hinted_bounds::HintedFont;
 use crate::raster::java_shape::{advance_width_px, rasterize_glyph, rasterize_glyph_in_layout};
 use crate::source::outline::{OutlineFont, resolve_codepoint};
 
+#[cfg(feature = "profiling")]
+use std::path::Path;
+#[cfg(feature = "profiling")]
+use std::time::{Duration, Instant};
+
 /// Named font data for the pipeline — bytes + identifier.
 pub struct FontAsset<'a> {
     pub data: &'a [u8],
@@ -66,6 +71,31 @@ pub fn build_from_config(
     primary_font_data: &[u8],
     fallback_font_data: &[(&[u8], String)],
 ) -> Result<BuildResult, FontbakeError> {
+    build_from_config_impl(spec, primary_font_data, fallback_font_data, None)
+}
+
+#[cfg(feature = "profiling")]
+pub fn build_from_config_profiled(
+    spec: &BuildSpec,
+    primary_font_data: &[u8],
+    fallback_font_data: &[(&[u8], String)],
+    profile_dir: Option<&Path>,
+) -> Result<BuildResult, FontbakeError> {
+    build_from_config_impl(spec, primary_font_data, fallback_font_data, profile_dir)
+}
+
+fn build_from_config_impl(
+    spec: &BuildSpec,
+    primary_font_data: &[u8],
+    fallback_font_data: &[(&[u8], String)],
+    #[cfg(feature = "profiling")] profile_dir: Option<&Path>,
+    #[cfg(not(feature = "profiling"))] _profile_dir: Option<&std::path::Path>,
+) -> Result<BuildResult, FontbakeError> {
+    #[cfg(feature = "profiling")]
+    let mut stage_timings = Vec::new();
+    #[cfg(feature = "profiling")]
+    let validate_and_load_fonts = StageTimer::start("01-validate-and-load-fonts");
+
     // --- Validate ---
     let (df_color, df_scale, df_spread) = match spec.effects.first() {
         Some(EffectSpec::DistanceField {
@@ -92,6 +122,12 @@ pub fn build_from_config(
     }
 
     let font_chain: Vec<&OutlineFont> = std::iter::once(&primary).chain(fallbacks.iter()).collect();
+
+    #[cfg(feature = "profiling")]
+    stage_timings.push(validate_and_load_fonts.finish());
+    #[cfg(feature = "profiling")]
+    let resolve_codepoints_and_metrics_setup =
+        StageTimer::start("02-resolve-codepoints-and-metrics-setup");
 
     // --- Resolve codepoints ---
     let size_px = spec.font_size as f32;
@@ -123,6 +159,11 @@ pub fn build_from_config(
     };
 
     let mut glyphs: Vec<GlyphRecord> = Vec::with_capacity(resolved_glyphs.len());
+
+    #[cfg(feature = "profiling")]
+    stage_timings.push(resolve_codepoints_and_metrics_setup.finish());
+    #[cfg(feature = "profiling")]
+    let rasterize_and_sdf = StageTimer::start("03-rasterize-and-sdf");
 
     for resolved in &resolved_glyphs {
         let cp = resolved.codepoint;
@@ -256,8 +297,18 @@ pub fn build_from_config(
         glyphs.push(rec);
     }
 
+    #[cfg(feature = "profiling")]
+    stage_timings.push(rasterize_and_sdf.finish());
+    #[cfg(feature = "profiling")]
+    let pack_pages = StageTimer::start("04-pack-pages");
+
     // --- Pack ---
     let pages = pack_glyphs(&mut glyphs, spec.page_width, spec.page_height)?;
+
+    #[cfg(feature = "profiling")]
+    stage_timings.push(pack_pages.finish());
+    #[cfg(feature = "profiling")]
+    let export_outputs = StageTimer::start("05-export-outputs");
 
     // --- Export ---
     // Java Hiero: lineHeight = descent + ascent + leading + padTop + padBottom + advY
@@ -305,12 +356,69 @@ pub fn build_from_config(
         .map(|p| encode_atlas_png(p))
         .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(BuildResult {
+    let result = BuildResult {
         fnt_text,
         page_pngs,
         glyphs,
-    })
+    };
+
+    #[cfg(feature = "profiling")]
+    stage_timings.push(export_outputs.finish());
+    #[cfg(feature = "profiling")]
+    write_stage_timings(profile_dir, &stage_timings)?;
+
+    Ok(result)
 }
+
+#[cfg(feature = "profiling")]
+struct StageTiming {
+    name: &'static str,
+    elapsed: Duration,
+}
+
+#[cfg(feature = "profiling")]
+struct StageTimer {
+    name: &'static str,
+    started_at: Instant,
+}
+
+#[cfg(feature = "profiling")]
+impl StageTimer {
+    fn start(name: &'static str) -> Self {
+        Self {
+            name,
+            started_at: Instant::now(),
+        }
+    }
+
+    fn finish(self) -> StageTiming {
+        StageTiming {
+            name: self.name,
+            elapsed: self.started_at.elapsed(),
+        }
+    }
+}
+
+#[cfg(feature = "profiling")]
+fn write_stage_timings(
+    profile_dir: Option<&Path>,
+    stage_timings: &[StageTiming],
+) -> Result<(), FontbakeError> {
+    let Some(profile_dir) = profile_dir else {
+        return Ok(());
+    };
+
+    let mut output = String::new();
+    for timing in stage_timings {
+        output.push_str(&format!("{}\t{:.3} ms\n", timing.name, timing.elapsed.as_secs_f64() * 1000.0));
+    }
+
+    let timings_path = profile_dir.join("stage-times.txt");
+    std::fs::write(&timings_path, output)
+        .map_err(|e| FontbakeError::Io(format!("write stage timings {}: {e}", timings_path.display())))?;
+    Ok(())
+}
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct JavaGlyphLayout {

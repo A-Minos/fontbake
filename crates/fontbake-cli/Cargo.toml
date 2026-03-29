@@ -3,6 +3,10 @@ name = "fontbake-cli"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+profiling = ["dep:pprof", "fontbake-core/profiling"]
+
 [[bin]]
 name = "fontbake"
 path = "src/main.rs"
@@ -12,3 +16,4 @@ fontbake-core = { path = "../fontbake-core" }
 clap.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
+pprof = { workspace = true, optional = true }
