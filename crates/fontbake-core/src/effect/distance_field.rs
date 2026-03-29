@@ -149,6 +149,17 @@ fn build_row_index(mask: &[u8], mask_w: u32, mask_h: u32) -> RowIndexTable {
     RowIndexTable { rows, xs }
 }
 
+fn nearest_candidates(xs: &[u32], cx: u32) -> (Option<u32>, Option<u32>) {
+    let insert_at = xs.partition_point(|&sx| sx < cx);
+    let left = if insert_at > 0 {
+        Some(xs[insert_at - 1])
+    } else {
+        None
+    };
+    let right = xs.get(insert_at).copied();
+    (left, right)
+}
+
 fn find_min_edge_distance(
     row_index: &RowIndexTable,
     w: u32,
@@ -184,7 +195,6 @@ fn find_min_edge_distance(
             continue;
         }
 
-        let insert_at = xs.partition_point(|&sx| sx < cx);
         let try_candidate = |sx: u32, min_dist_sq: &mut f32| {
             if sx < x0 || sx > x1 {
                 return;
@@ -196,11 +206,12 @@ fn find_min_edge_distance(
             }
         };
 
-        if let Some(&sx) = xs.get(insert_at) {
+        let (left, right) = nearest_candidates(xs, cx);
+        if let Some(sx) = right {
             try_candidate(sx, &mut min_dist_sq);
         }
-        if insert_at > 0 {
-            try_candidate(xs[insert_at - 1], &mut min_dist_sq);
+        if let Some(sx) = left {
+            try_candidate(sx, &mut min_dist_sq);
         }
     }
 
@@ -507,5 +518,13 @@ mod tests {
 
         assert_eq!(stored_positions, mask.len());
         assert_eq!(table.xs.len(), mask.len());
+    }
+
+    #[test]
+    fn nearest_candidates_returns_immediate_neighbors_around_cx() {
+        let xs = [2u32, 5, 9, 14];
+        assert_eq!(nearest_candidates(&xs, 7), (Some(5), Some(9)));
+        assert_eq!(nearest_candidates(&xs, 2), (None, Some(2)));
+        assert_eq!(nearest_candidates(&xs, 20), (Some(14), None));
     }
 }
