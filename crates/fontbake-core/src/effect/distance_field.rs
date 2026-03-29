@@ -149,8 +149,22 @@ fn build_row_index(mask: &[u8], mask_w: u32, mask_h: u32) -> RowIndexTable {
     RowIndexTable { rows, xs }
 }
 
+fn lower_bound(xs: &[u32], target: u32) -> usize {
+    let mut lo = 0usize;
+    let mut hi = xs.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if xs[mid] < target {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
 fn nearest_candidates(xs: &[u32], cx: u32) -> (Option<u32>, Option<u32>) {
-    let insert_at = xs.partition_point(|&sx| sx < cx);
+    let insert_at = lower_bound(xs, cx);
     let left = if insert_at > 0 {
         Some(xs[insert_at - 1])
     } else {
@@ -529,5 +543,15 @@ mod tests {
         assert_eq!(nearest_candidates(&xs, 7), (Some(5), Some(9)));
         assert_eq!(nearest_candidates(&xs, 2), (None, Some(2)));
         assert_eq!(nearest_candidates(&xs, 20), (Some(14), None));
+    }
+
+    #[test]
+    fn lower_bound_returns_first_index_not_less_than_target() {
+        let xs = [2u32, 5, 9, 14];
+        assert_eq!(lower_bound(&xs, 0), 0);
+        assert_eq!(lower_bound(&xs, 2), 0);
+        assert_eq!(lower_bound(&xs, 6), 2);
+        assert_eq!(lower_bound(&xs, 14), 3);
+        assert_eq!(lower_bound(&xs, 20), 4);
     }
 }
